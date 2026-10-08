@@ -1,0 +1,8 @@
+content/
+
+_bmad/
+_bmad-output
+.claude/
+CLAUDE.md
+
+.venv/
