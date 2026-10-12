@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push makes older PR runs redundant; main runs are kept so every commit has a verdict.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      # --locked fails when uv.lock is stale relative to pyproject.toml.
+      - run: uv sync --locked
+      # Guards against a leg silently running a different interpreter.
+      - run: uv run python -c "import sys; assert f'{sys.version_info.major}.{sys.version_info.minor}' == '${{ matrix.python }}', sys.version"
+      - run: uv run ruff check .
+      - run: uv run mypy primagate
+      - run: uv run pytest
+
+  package:
+    name: package (clean install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+      - run: uv build --wheel
+      # Isolated env without dev dependencies, as a first-time user would install it.
+      - name: Import and inspect the installed wheel
+        run: |
+          uv run --no-project --isolated --with dist/*.whl python -I -c "
+          from importlib.metadata import requires
+          import primagate
+          assert primagate.__version__
+          assert requires('primagate') == ['httpx2<3,>=2.13'], requires('primagate')
+          "
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [test, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        run: |
+          [ "${{ needs.test.result }}" = "success" ] && [ "${{ needs.package.result }}" = "success" ]
