@@ -6,8 +6,8 @@ import primagate
 ROOT = Path(primagate.__file__).parent
 
 ALLOWED: dict[str, set[str]] = {
-    "client": {"drivers"},
-    "drivers": {"core", "adapters", "transport", "stores"},
+    "client": {"drivers", "schema"},
+    "drivers": {"core", "adapters", "transport", "stores", "schema"},
     "stores": {"core", "schema"},
     "core": {"schema"},
     "adapters": {"schema"},
