@@ -26,7 +26,7 @@ async def test_async_recorded_mode_needs_no_network() -> None:
     assert len(calls) == 1
 
 
-def test_first_call_recorded_through_primagate() -> None:
+def test_first_call_recorded_through_primagate(call) -> None:  # type: ignore[no-untyped-def]
     import sys
 
     from primagate import PrimaGate
@@ -52,7 +52,7 @@ def test_first_call_recorded_through_primagate() -> None:
         )
 
     gate = PrimaGate(api_key="sk-recorded", transport=httpx2.MockTransport(handle))
-    resp = gate.completion(model="gpt-4o", messages=[{"role": "user", "content": "hello"}])
+    resp = call(gate, model="gpt-4o", messages=[{"role": "user", "content": "hello"}])
     assert resp.choices[0].message.content == "hi"
     assert len(calls) == 1
     assert "openai" not in sys.modules

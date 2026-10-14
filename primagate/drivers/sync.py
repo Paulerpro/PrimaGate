@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import httpx2
@@ -11,18 +10,11 @@ from primagate.adapters.openai import OpenAIAdapter
 from primagate.core import steps
 from primagate.core.call import first_action, next_action
 from primagate.core.ports import Adapter
+from primagate.drivers._shared import Finished, Step, prepare, settle
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionRequest
 from primagate.schema.wire import ProviderSettings
 from primagate.transport.sync import SyncTransport
-
-
-@dataclass(frozen=True)
-class Finished:
-    response: ChatCompletion
-
-
-Step = steps.DispatchOutcome | Finished
 
 
 class SyncDriver:
@@ -73,19 +65,9 @@ class SyncDriver:
         return handler(self, action)
 
     def _dispatch(self, action: steps.Dispatch) -> Step:
-        adapter = self._adapters[action.provider]
-        settings = self._settings[action.provider]
-        provider_request = adapter.build_request(
-            action.request, api_key=settings.api_key, base_url=settings.base_url
-        )
+        provider_request = prepare(self._adapters, self._settings, action)
         raw = self._transport.send(provider_request)
-        try:
-            if raw.ok:
-                return steps.DispatchOutcome(response=adapter.parse_response(raw))
-            error = adapter.map_error(raw)
-        except PrimaGateError as err:
-            error = err
-        return steps.DispatchOutcome(error=error.redact([settings.api_key]))
+        return settle(self._adapters, self._settings, action, raw)
 
     def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
