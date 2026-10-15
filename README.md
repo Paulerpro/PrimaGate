@@ -2,19 +2,67 @@
 
 One call shape for LLM providers, embedded in your process.
 
+## Quickstart
+
+### 1. Install
+
+```bash
+pip install primagate
+```
+
+Python 3.11 or newer. PrimaGate talks to providers directly,
+so you do not install the OpenAI or Anthropic SDK.
+
+### 2. Set your key
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+On Windows PowerShell: `$env:OPENAI_API_KEY = "sk-..."`. To skip the environment variable,
+pass the key when you create an instance: `PrimaGate(api_key="sk-...")`.
+
+### 3. Make a call
+
 ```python
 from primagate import completion
 
 response = completion(
     model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello"}],
+    messages=[{"role": "user", "content": "Say hello in five words."}],
 )
 print(response.choices[0].message.content)
 ```
 
-The key comes from `OPENAI_API_KEY`, or pass `PrimaGate(api_key=...)` and call
-`.completion(...)` on that instance. A `model` of `gpt-4o` and `openai/gpt-4o` both
-route to OpenAI.
+`gpt-4o` and `openai/gpt-4o` both route to OpenAI.
+
+### 4. Make the same call asynchronously
+
+```python
+import asyncio
+
+from primagate import acompletion
+
+
+async def main() -> None:
+    response = await acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Say hello in five words."}],
+    )
+    print(response.choices[0].message.content)
+
+
+asyncio.run(main())
+```
+
+`acompletion` takes the same arguments as `completion` and returns the same response.
+Both use one shared default instance. Create your own with `PrimaGate(...)` when you need
+separate keys or settings, and call `await gate.aclose()` (or `gate.close()` from sync code)
+when you are done with it.
+
+## Notes
+
+- [Proxies and certificates](#install-notes)
 
 ## Install notes
 
