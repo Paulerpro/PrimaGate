@@ -39,12 +39,14 @@ def _gate(
         calls.append(request)
         return httpx2.Response(status, json=body)
 
-    return PrimaGate(api_key=key, transport=httpx2.MockTransport(handle)), calls
+    keys = {"openai": key} if key else None
+    return PrimaGate(api_keys=keys, transport=httpx2.MockTransport(handle)), calls
 
 
 @pytest.fixture(autouse=True)
 def _no_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
 def test_first_call_returns_unified_response(call: Caller) -> None:
@@ -109,7 +111,7 @@ def test_connection_failure_maps_to_api_connection_error(call: Caller) -> None:
     def handle(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("down")
 
-    gate = PrimaGate(api_key=KEY, transport=httpx2.MockTransport(handle))
+    gate = PrimaGate(api_keys={"openai": KEY}, transport=httpx2.MockTransport(handle))
     with pytest.raises(errors.APIConnectionError):
         call(gate, model="gpt-4o", messages=MSGS)
 
@@ -296,3 +298,143 @@ async def test_driver_is_reused_after_the_key_disappears(monkeypatch: pytest.Mon
     monkeypatch.delenv("OPENAI_API_KEY")
     await gate.acompletion(model="gpt-4o", messages=MSGS)
     assert len(calls) == 2
+
+
+ANTHROPIC_OK = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [{"type": "text", "text": "hello"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+AKEY = "sk-ant-test-key-123456"
+
+
+def _both(
+    status: int = 200, body: object = ANTHROPIC_OK, **kwargs: object
+) -> tuple[PrimaGate, list[httpx2.Request]]:
+    calls: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        calls.append(request)
+        return httpx2.Response(status, json=body)
+
+    gate = PrimaGate(transport=httpx2.MockTransport(handle), **kwargs)  # type: ignore[arg-type]
+    return gate, calls
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "anthropic/claude-sonnet-5-5"])
+def test_claude_models_go_to_anthropic_with_their_own_key(model: str, call: Caller) -> None:
+    gate, calls = _both(api_keys={"openai": KEY, "anthropic": AKEY})
+    resp = call(gate, model=model, messages=MSGS)
+    assert resp.choices[0].message.content == "hello"
+    request = calls[0]
+    assert request.url == "https://api.anthropic.com/v1/messages"
+    assert request.headers["x-api-key"] == AKEY
+    assert KEY not in str(request.headers)
+    assert json.loads(request.content)["model"] == "claude-sonnet-5-5"
+
+
+def test_anthropic_key_is_never_sent_to_openai(call: Caller) -> None:
+    gate, calls = _both(body=OK, api_keys={"openai": KEY, "anthropic": AKEY})
+    call(gate, model="gpt-4o", messages=MSGS)
+    assert AKEY not in str(calls[0].headers)
+    assert calls[0].headers["authorization"] == f"Bearer {KEY}"
+
+
+def test_anthropic_key_comes_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, call: Caller
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", AKEY)
+    gate, calls = _both()
+    call(gate, model="claude-sonnet-5-5", messages=MSGS)
+    assert calls[0].headers["x-api-key"] == AKEY
+
+
+def test_init_key_wins_over_anthropic_env(monkeypatch: pytest.MonkeyPatch, call: Caller) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+    gate, calls = _both(api_keys={"anthropic": AKEY})
+    call(gate, model="claude-sonnet-5-5", messages=MSGS)
+    assert calls[0].headers["x-api-key"] == AKEY
+
+
+def test_missing_anthropic_key_names_anthropic_and_sends_nothing(call: Caller) -> None:
+    gate, calls = _both(api_keys={"openai": KEY})
+    with pytest.raises(errors.AuthenticationError) as info:
+        call(gate, model="claude-sonnet-5-5", messages=MSGS)
+    assert info.value.llm_provider == "anthropic"
+    assert "ANTHROPIC_API_KEY" in info.value.message
+    assert calls == []
+
+
+def test_missing_key_for_one_provider_does_not_block_the_other(call: Caller) -> None:
+    gate, calls = _gate()
+    call(gate, model="gpt-4o", messages=MSGS)
+    with pytest.raises(errors.AuthenticationError):
+        call(gate, model="claude-sonnet-5-5", messages=MSGS)
+    assert len(calls) == 1
+
+
+def test_base_urls_override_per_provider(call: Caller) -> None:
+    gate, calls = _both(
+        api_keys={"anthropic": AKEY}, base_urls={"anthropic": "https://proxy.test/anthropic/v1"}
+    )
+    call(gate, model="claude-sonnet-5-5", messages=MSGS)
+    assert str(calls[0].url) == "https://proxy.test/anthropic/v1/messages"
+
+
+def test_unknown_provider_names_in_config_maps_raise_at_init() -> None:
+    with pytest.raises(errors.BadRequestError, match="anthopic"):
+        PrimaGate(api_keys={"anthopic": AKEY})
+    with pytest.raises(errors.BadRequestError, match="nope"):
+        PrimaGate(base_urls={"nope": "https://x.test"})
+
+
+def test_unknown_provider_prefix_fails_before_any_network_call(call: Caller) -> None:
+    gate, calls = _both(api_keys={"anthropic": AKEY})
+    with pytest.raises(errors.BadRequestError, match="nope"):
+        call(gate, model="nope/some-model", messages=MSGS)
+    assert calls == []
+
+
+def test_anthropic_context_window_and_openai_context_window_share_a_class(call: Caller) -> None:
+    openai_gate, _ = _gate(
+        400, {"error": {"message": "too long", "code": "context_length_exceeded"}}
+    )
+    anthropic_gate, _ = _both(
+        400,
+        {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "prompt is too long"},
+        },
+        api_keys={"anthropic": AKEY},
+    )
+    with pytest.raises(errors.ContextWindowExceededError):
+        call(openai_gate, model="gpt-4o", messages=MSGS)
+    with pytest.raises(errors.ContextWindowExceededError):
+        call(anthropic_gate, model="claude-sonnet-5-5", messages=MSGS)
+
+
+def test_anthropic_key_never_appears_in_errors_repr_or_logs(
+    caplog: pytest.LogCaptureFixture, call: Caller
+) -> None:
+    echoed = {
+        "type": "error",
+        "error": {"type": "authentication_error", "message": f"invalid x-api-key {AKEY}"},
+    }
+    gate, _ = _both(401, echoed, api_keys={"anthropic": AKEY})
+    with caplog.at_level(logging.DEBUG), pytest.raises(errors.AuthenticationError) as info:
+        call(gate, model="claude-sonnet-5-5", messages=MSGS)
+    err = info.value
+    for text in (str(err), repr(err), err.message, "".join(map(str, err.args)), repr(gate)):
+        assert AKEY not in text
+    assert all(AKEY not in r.getMessage() for r in caplog.records)
+
+
+def test_client_module_carries_no_openai_literals() -> None:
+    from pathlib import Path
+
+    source = Path(client_module.__file__).read_text(encoding="utf-8")
+    assert "openai" not in source.lower()

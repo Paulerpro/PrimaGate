@@ -5,9 +5,10 @@ from dataclasses import dataclass
 
 from primagate.core import steps
 from primagate.core.ports import Adapter
+from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion
-from primagate.schema.wire import ProviderRequest, ProviderSettings, RawOutcome
+from primagate.schema.wire import ProviderRequest, RawOutcome
 
 
 @dataclass(frozen=True)
@@ -20,7 +21,7 @@ Step = steps.DispatchOutcome | Finished
 
 def prepare(
     adapters: Mapping[str, Adapter],
-    settings: Mapping[str, ProviderSettings],
+    settings: SettingsSource,
     action: steps.Dispatch,
 ) -> ProviderRequest:
     adapter = adapters[action.provider]
@@ -30,7 +31,7 @@ def prepare(
 
 def settle(
     adapters: Mapping[str, Adapter],
-    settings: Mapping[str, ProviderSettings],
+    settings: SettingsSource,
     action: steps.Dispatch,
     raw: RawOutcome,
 ) -> steps.DispatchOutcome:

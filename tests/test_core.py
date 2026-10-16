@@ -29,6 +29,22 @@ def test_resolve_model_routes_to_openai(name: str) -> None:
     assert resolve_model(name) == ("openai", "gpt-4o")
 
 
+@pytest.mark.parametrize("name", ["claude-sonnet-5-5", "anthropic/claude-sonnet-5-5"])
+def test_resolve_model_routes_claude_to_anthropic(name: str) -> None:
+    assert resolve_model(name) == ("anthropic", "claude-sonnet-5-5")
+
+
+def test_routing_and_driver_provider_tables_agree() -> None:
+    from primagate.core.call import KNOWN_PROVIDERS
+    from primagate.drivers.providers import BUILTIN_PROVIDERS
+
+    assert KNOWN_PROVIDERS == set(BUILTIN_PROVIDERS)
+
+
+def test_bare_non_claude_names_stay_on_openai() -> None:
+    assert resolve_model("some-local-model") == ("openai", "some-local-model")
+
+
 def test_resolve_model_rejects_unknown_provider_prefix() -> None:
     with pytest.raises(BadRequestError):
         resolve_model("nope/some-model")

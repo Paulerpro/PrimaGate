@@ -20,7 +20,10 @@ export OPENAI_API_KEY="sk-..."
 ```
 
 On Windows PowerShell: `$env:OPENAI_API_KEY = "sk-..."`. To skip the environment variable,
-pass the key when you create an instance: `PrimaGate(api_key="sk-...")`.
+pass the key when you create an instance: `PrimaGate(api_keys={"openai": "sk-..."})`.
+For Anthropic models, set `ANTHROPIC_API_KEY` or pass `api_keys={"anthropic": "..."}`; each key is
+only ever sent to its own provider. A bare model name starting `claude-` goes to Anthropic and any
+other bare name to OpenAI; write `openai/<name>` to force OpenAI for a model with a `claude-` name.
 
 ### 3. Make a call
 

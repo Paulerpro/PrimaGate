@@ -51,7 +51,7 @@ def test_first_call_recorded_through_primagate(call) -> None:  # type: ignore[no
             },
         )
 
-    gate = PrimaGate(api_key="sk-recorded", transport=httpx2.MockTransport(handle))
+    gate = PrimaGate(api_keys={"openai": "sk-recorded"}, transport=httpx2.MockTransport(handle))
     resp = call(gate, model="gpt-4o", messages=[{"role": "user", "content": "hello"}])
     assert resp.choices[0].message.content == "hi"
     assert len(calls) == 1

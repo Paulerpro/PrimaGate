@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from primagate.adapters._common import error_details
 from primagate.schema import errors
 from primagate.schema.types import (
     ChatCompletion,
@@ -14,6 +15,8 @@ from primagate.schema.types import (
 from primagate.schema.wire import Capabilities, ProviderRequest, RawOutcome
 
 PROVIDER = "openai"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+KEY_ENV = "OPENAI_API_KEY"
 
 _CONTEXT_CODES = {"context_length_exceeded"}
 _POLICY_CODES = {"content_policy_violation", "content_filter"}
@@ -68,7 +71,7 @@ class OpenAIAdapter:
         if outcome.failure is not None:
             return errors.APIConnectionError("Connection to OpenAI failed", llm_provider=PROVIDER)
 
-        message, code = _error_details(outcome.body)
+        message, code = error_details(outcome.body, "code")
         status = outcome.status
         if status == 400 and code in _CONTEXT_CODES:
             cls: type[errors.PrimaGateError] = errors.ContextWindowExceededError
@@ -82,19 +85,6 @@ class OpenAIAdapter:
 
     def capabilities(self) -> Capabilities:
         return Capabilities()
-
-
-def _error_details(body: bytes) -> tuple[str, str | None]:
-    try:
-        err = json.loads(body)["error"]
-        message = err["message"]
-        code = err.get("code")
-        if isinstance(message, str) and message:
-            return message, code if isinstance(code, str) else None
-    except (ValueError, KeyError, TypeError, AttributeError):
-        pass
-    # Non-JSON bodies (gateway pages) are still worth surfacing, but bounded.
-    return body.decode("utf-8", errors="replace")[:500] or "Unknown error", None
 
 
 def _choice(raw: dict[str, Any]) -> Choice:

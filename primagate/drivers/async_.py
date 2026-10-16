@@ -5,15 +5,13 @@ from typing import Any, ClassVar
 
 import httpx2
 
-from primagate.adapters.openai import PROVIDER as OPENAI
-from primagate.adapters.openai import OpenAIAdapter
 from primagate.core import steps
 from primagate.core.call import first_action, next_action
 from primagate.core.ports import Adapter
 from primagate.drivers._shared import Finished, Step, prepare, settle
+from primagate.drivers.providers import SettingsResolver, SettingsSource, builtin_adapters
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionRequest
-from primagate.schema.wire import ProviderSettings
 from primagate.transport.async_ import AsyncTransport
 
 
@@ -24,7 +22,7 @@ class AsyncDriver:
         self,
         *,
         adapters: Mapping[str, Adapter],
-        settings: Mapping[str, ProviderSettings],
+        settings: SettingsSource,
         transport: AsyncTransport,
     ) -> None:
         self._adapters = adapters
@@ -35,14 +33,14 @@ class AsyncDriver:
     def with_builtin_adapters(
         cls,
         *,
-        api_key: str,
-        base_url: str,
+        api_keys: Mapping[str, str] | None = None,
+        base_urls: Mapping[str, str] | None = None,
         timeout: float,
         http_transport: httpx2.AsyncBaseTransport | None = None,
     ) -> AsyncDriver:
         return cls(
-            adapters={OPENAI: OpenAIAdapter()},
-            settings={OPENAI: ProviderSettings(api_key=api_key, base_url=base_url)},
+            adapters=builtin_adapters(),
+            settings=SettingsResolver(api_keys=api_keys, base_urls=base_urls),
             transport=AsyncTransport(timeout=timeout, transport=http_transport),
         )
 

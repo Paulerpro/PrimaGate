@@ -1,0 +1,220 @@
+import ast
+import json
+from pathlib import Path
+
+import pytest
+
+import primagate.adapters.anthropic as anthropic_adapter
+from primagate.adapters.anthropic import AnthropicAdapter
+from primagate.schema import errors
+from primagate.schema.types import ChatCompletionRequest, Message
+from primagate.schema.wire import RawOutcome
+
+BASE = "https://x.test/v1"
+
+
+def _request(*messages: Message, **kwargs: object) -> ChatCompletionRequest:
+    return ChatCompletionRequest(model="claude-sonnet-5-5", messages=list(messages), **kwargs)  # type: ignore[arg-type]
+
+
+def _build(*messages: Message, **kwargs: object):  # type: ignore[no-untyped-def]
+    return AnthropicAdapter().build_request(
+        _request(*messages, **kwargs), api_key="sk-ant-secret", base_url=BASE + "/"
+    )
+
+
+def _outcome(status: int, body: object, *, headers: dict[str, str] | None = None) -> RawOutcome:
+    raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return RawOutcome(status=status, headers=headers or {}, body=raw)
+
+
+OK = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [{"type": "text", "text": "hello"}, {"type": "text", "text": " there"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 4},
+}
+
+
+def test_build_request_shape_and_headers() -> None:
+    out = _build(Message(role="user", content="hi"), temperature=0.2, top_p=0.9)
+    assert out.method == "POST"
+    assert out.url == f"{BASE}/messages"
+    assert out.headers["x-api-key"] == "sk-ant-secret"
+    assert out.headers["anthropic-version"] == "2023-06-01"
+    assert out.json_body == {
+        "model": "claude-sonnet-5-5",
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "top_p": 0.9,
+    }
+    assert "sk-ant-secret" not in repr(out)
+
+
+def test_caller_max_tokens_wins_over_the_default() -> None:
+    assert _build(Message(role="user", content="hi"), max_tokens=7).json_body["max_tokens"] == 7
+
+
+def test_system_messages_are_joined_and_removed_from_messages() -> None:
+    out = _build(
+        Message(role="system", content="be brief"),
+        Message(role="user", content="hi"),
+        Message(role="system", content="be kind"),
+    )
+    assert out.json_body["system"] == "be brief\n\nbe kind"
+    assert out.json_body["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_no_system_key_without_system_messages() -> None:
+    assert "system" not in _build(Message(role="user", content="hi")).json_body
+
+
+def test_build_does_not_mutate_the_callers_request() -> None:
+    request = _request(Message(role="system", content="s"), Message(role="user", content="hi"))
+    before = request.to_dict()
+    AnthropicAdapter().build_request(request, api_key="k", base_url=BASE)
+    assert request.to_dict() == before
+
+
+@pytest.mark.parametrize(("stop", "expected"), [("x", ["x"]), (["a", "b"], ["a", "b"])])
+def test_stop_becomes_stop_sequences(stop: object, expected: list[str]) -> None:
+    body = _build(Message(role="user", content="hi"), stop=stop).json_body
+    assert body["stop_sequences"] == expected
+    assert "stop" not in body
+
+
+@pytest.mark.parametrize("kwargs", [{"n": 2}, {"seed": 1}])
+def test_unsupported_params_raise_instead_of_being_dropped(kwargs: dict[str, int]) -> None:
+    with pytest.raises(errors.UnsupportedParamsError) as info:
+        _build(Message(role="user", content="hi"), **kwargs)
+    assert next(iter(kwargs)) in info.value.message
+    assert info.value.llm_provider == "anthropic"
+
+
+def test_n_equal_to_one_is_accepted() -> None:
+    assert "n" not in _build(Message(role="user", content="hi"), n=1).json_body
+
+
+def test_unsupported_role_raises_bad_request() -> None:
+    with pytest.raises(errors.BadRequestError):
+        _build(Message(role="tool", content="x"))
+
+
+def test_parse_response_matches_the_unified_shape() -> None:
+    resp = AnthropicAdapter().parse_response(
+        _outcome(200, OK, headers={"date": "Thu, 01 Jan 1970 00:00:10 GMT"})
+    )
+    assert resp.id == "msg_1"
+    assert resp.model == "claude-sonnet-5-5"
+    assert resp.created == 10
+    assert resp.object == "chat.completion"
+    assert len(resp.choices) == 1
+    choice = resp.choices[0]
+    assert (choice.index, choice.message.role, choice.finish_reason) == (0, "assistant", "stop")
+    assert choice.message.content == "hello there"
+    assert resp.usage is not None
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (
+        3,
+        4,
+        7,
+    )
+
+
+def test_created_is_zero_without_a_usable_date_header() -> None:
+    adapter = AnthropicAdapter()
+    assert adapter.parse_response(_outcome(200, OK)).created == 0
+    assert adapter.parse_response(_outcome(200, OK, headers={"date": "garbage"})).created == 0
+
+
+def test_naive_date_zone_is_read_as_utc() -> None:
+    headers = {"date": "Thu, 01 Jan 1970 00:00:10 -0000"}
+    assert AnthropicAdapter().parse_response(_outcome(200, OK, headers=headers)).created == 10
+
+
+def test_date_header_is_found_case_insensitively() -> None:
+    headers = {"Date": "Thu, 01 Jan 1970 00:00:10 GMT"}
+    assert AnthropicAdapter().parse_response(_outcome(200, OK, headers=headers)).created == 10
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [("end_turn", "stop"), ("stop_sequence", "stop"), ("max_tokens", "length"), ("odd", "odd")],
+)
+def test_stop_reason_mapping(reason: str, expected: str) -> None:
+    body = {**OK, "stop_reason": reason}
+    out = AnthropicAdapter().parse_response(_outcome(200, body))
+    assert out.choices[0].finish_reason == expected
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[]", b'{"content": 5}', {**OK, "usage": {}}])
+def test_parse_response_invalid_body_is_api_error(body: object) -> None:
+    with pytest.raises(errors.APIError) as info:
+        AnthropicAdapter().parse_response(_outcome(200, body))
+    assert info.value.llm_provider == "anthropic"
+
+
+def _err(status: int, *, kind: str = "invalid_request_error", msg: str = "bad") -> RawOutcome:
+    return _outcome(status, {"type": "error", "error": {"type": kind, "message": msg}})
+
+
+@pytest.mark.parametrize(
+    ("outcome", "cls"),
+    [
+        (_err(400), errors.BadRequestError),
+        (_err(401, kind="authentication_error"), errors.AuthenticationError),
+        (_err(403, kind="permission_error"), errors.PermissionDeniedError),
+        (_err(404, kind="not_found_error"), errors.NotFoundError),
+        (_err(408), errors.Timeout),
+        (_err(413, kind="request_too_large"), errors.BadRequestError),
+        (_err(429, kind="rate_limit_error"), errors.RateLimitError),
+        (_err(500, kind="api_error"), errors.ServiceUnavailableError),
+        (_err(529, kind="overloaded_error"), errors.ServiceUnavailableError),
+        (_err(418), errors.APIError),
+        (RawOutcome(status=None, headers={}, body=b"", failure="timeout"), errors.Timeout),
+        (
+            RawOutcome(status=None, headers={}, body=b"", failure="connection"),
+            errors.APIConnectionError,
+        ),
+    ],
+)
+def test_map_error(outcome: RawOutcome, cls: type[errors.PrimaGateError]) -> None:
+    err = AnthropicAdapter().map_error(outcome)
+    assert type(err) is cls
+    assert err.llm_provider == "anthropic"
+    assert err.status_code == outcome.status
+
+
+@pytest.mark.parametrize(
+    "msg", ["prompt is too long: 250000 tokens > 200000 maximum", "exceeds the context window"]
+)
+def test_context_window_failure_maps_to_context_window_exceeded(msg: str) -> None:
+    err = AnthropicAdapter().map_error(_err(400, msg=msg))
+    assert type(err) is errors.ContextWindowExceededError
+
+
+def test_map_error_uses_provider_message_and_bounds_non_json_bodies() -> None:
+    adapter = AnthropicAdapter()
+    assert adapter.map_error(_err(429, msg="slow down")).message == "slow down"
+    assert len(adapter.map_error(_outcome(502, b"x" * 2000)).message) == 500
+
+
+def test_capabilities_and_stream_stub() -> None:
+    adapter = AnthropicAdapter()
+    assert adapter.capabilities().streaming is False
+    with pytest.raises(NotImplementedError):
+        adapter.new_stream_parser()
+
+
+def test_adapter_module_performs_no_io() -> None:
+    tree = ast.parse(Path(anthropic_adapter.__file__).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert not imported & {"httpx2", "socket", "urllib", "requests", "os", "subprocess"}

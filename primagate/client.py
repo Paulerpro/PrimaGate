@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 from collections.abc import Mapping, Sequence
 from typing import cast
@@ -8,11 +7,11 @@ from typing import cast
 import httpx2
 
 from primagate.drivers.async_ import AsyncDriver
+from primagate.drivers.providers import check_provider_names
 from primagate.drivers.sync import SyncDriver
-from primagate.schema.errors import AuthenticationError, BadRequestError, PrimaGateError
+from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionRequest, Message
 
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_TIMEOUT = 60.0
 
 MessageInput = Message | Mapping[str, str | None]
@@ -23,15 +22,17 @@ class PrimaGate:
 
     def __init__(
         self,
-        api_key: str | None = None,
+        api_keys: Mapping[str, str] | None = None,
         *,
-        base_url: str = DEFAULT_BASE_URL,
+        base_urls: Mapping[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
-        self._api_key = api_key
-        self._base_url = base_url
+        check_provider_names("api_keys", api_keys or {})
+        check_provider_names("base_urls", base_urls or {})
+        self._api_keys = dict(api_keys or {})
+        self._base_urls = dict(base_urls or {})
         self._timeout = timeout
         self._http_transport = transport
         self._driver: SyncDriver | None = None
@@ -40,7 +41,7 @@ class PrimaGate:
         self._lock = threading.Lock()
 
     def __repr__(self) -> str:
-        return f"PrimaGate(base_url={self._base_url!r}, closed={self._closed})"
+        return f"PrimaGate(closed={self._closed})"
 
     def completion(
         self,
@@ -95,8 +96,8 @@ class PrimaGate:
             self._check_open()
             if self._driver is None:
                 self._driver = SyncDriver.with_builtin_adapters(
-                    api_key=self._resolve_key(),
-                    base_url=self._base_url,
+                    api_keys=self._api_keys,
+                    base_urls=self._base_urls,
                     timeout=self._timeout,
                     http_transport=self._http_transport,
                 )
@@ -107,8 +108,8 @@ class PrimaGate:
             self._check_open()
             if self._async_driver is None:
                 self._async_driver = AsyncDriver.with_builtin_adapters(
-                    api_key=self._resolve_key(),
-                    base_url=self._base_url,
+                    api_keys=self._api_keys,
+                    base_urls=self._base_urls,
                     timeout=self._timeout,
                     http_transport=cast(httpx2.AsyncBaseTransport | None, self._http_transport),
                 )
@@ -117,15 +118,6 @@ class PrimaGate:
     def _check_open(self) -> None:
         if self._closed:
             raise PrimaGateError("PrimaGate instance is closed")
-
-    def _resolve_key(self) -> str:
-        key = self._api_key or os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise AuthenticationError(
-                "No OpenAI API key: pass api_key or set OPENAI_API_KEY",
-                llm_provider="openai",
-            )
-        return key
 
 
 def _request(
@@ -139,7 +131,7 @@ def _request(
     seed: int | None,
 ) -> ChatCompletionRequest:
     if isinstance(messages, str | bytes):
-        raise BadRequestError("messages must be a list of messages", llm_provider="openai")
+        raise BadRequestError("messages must be a list of messages")
     return ChatCompletionRequest(
         model=model,
         messages=[_message(m) for m in messages],
@@ -156,7 +148,7 @@ def _message(value: MessageInput) -> Message:
     if isinstance(value, Message):
         return value
     if not isinstance(value, Mapping) or not value.get("role"):
-        raise BadRequestError("Each message needs a 'role'", llm_provider="openai")
+        raise BadRequestError("Each message needs a 'role'")
     return Message(role=str(value["role"]), content=value.get("content"), name=value.get("name"))
 
 
