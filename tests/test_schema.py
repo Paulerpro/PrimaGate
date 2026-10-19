@@ -5,7 +5,9 @@ from primagate.schema.types import (
     Choice,
     ChunkChoice,
     Delta,
+    FunctionCall,
     Message,
+    ToolCall,
     Usage,
 )
 
@@ -66,3 +68,31 @@ def test_chunk_round_trip() -> None:
     assert chunk.choices[0].delta.content == "x"
     assert chunk.model_dump() == chunk.to_dict()
     assert chunk.to_dict()["choices"][0]["delta"] == {"content": "x"}
+
+
+def test_assistant_tool_call_message_keeps_null_content() -> None:
+    call = ToolCall(id="call_1", function=FunctionCall(name="f", arguments="{}"))
+    assert Message(role="assistant", tool_calls=[call]).to_dict() == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+        ],
+    }
+
+
+def test_message_without_content_or_calls_still_omits_content() -> None:
+    assert Message(role="user").to_dict() == {"role": "user"}
+
+
+def test_tool_result_message_carries_its_call_id() -> None:
+    msg = Message(role="tool", tool_call_id="call_1", content="42")
+    assert msg.to_dict() == {"role": "tool", "content": "42", "tool_call_id": "call_1"}
+
+
+def test_tool_result_without_content_still_sends_a_null_content() -> None:
+    assert Message(role="tool", tool_call_id="c1").to_dict() == {
+        "role": "tool",
+        "content": None,
+        "tool_call_id": "c1",
+    }

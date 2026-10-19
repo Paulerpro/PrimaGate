@@ -7,7 +7,7 @@ import pytest
 import primagate.adapters.anthropic as anthropic_adapter
 from primagate.adapters.anthropic import AnthropicAdapter
 from primagate.schema import errors
-from primagate.schema.types import ChatCompletionRequest, Message
+from primagate.schema.types import ChatCompletionRequest, FunctionCall, Message, ToolCall
 from primagate.schema.wire import RawOutcome
 
 BASE = "https://x.test/v1"
@@ -101,7 +101,7 @@ def test_n_equal_to_one_is_accepted() -> None:
 
 def test_unsupported_role_raises_bad_request() -> None:
     with pytest.raises(errors.BadRequestError):
-        _build(Message(role="tool", content="x"))
+        _build(Message(role="function", content="x"))
 
 
 def test_parse_response_matches_the_unified_shape() -> None:
@@ -218,3 +218,119 @@ def test_adapter_module_performs_no_io() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert not imported & {"httpx2", "socket", "urllib", "requests", "os", "subprocess"}
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "weather",
+            "description": "Look up weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+]
+
+
+def _calls(*pairs: tuple[str, str]) -> list[ToolCall]:
+    return [ToolCall(id=i, function=FunctionCall(name="weather", arguments=a)) for i, a in pairs]
+
+
+def test_tool_definitions_become_input_schema() -> None:
+    body = _build(Message(role="user", content="hi"), tools=TOOLS).json_body
+    assert body["tools"] == [
+        {
+            "name": "weather",
+            "description": "Look up weather",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }
+    ]
+
+
+def test_tool_definition_without_parameters_gets_an_empty_object_schema() -> None:
+    tools = [{"type": "function", "function": {"name": "ping"}}]
+    body = _build(Message(role="user", content="hi"), tools=tools).json_body
+    assert body["tools"] == [{"name": "ping", "input_schema": {"type": "object"}}]
+
+
+def test_assistant_calls_and_merged_results_become_blocks() -> None:
+    body = _build(
+        Message(role="user", content="hi"),
+        Message(
+            role="assistant",
+            content="checking",
+            tool_calls=_calls(("toolu_1", '{"city":"A"}'), ("toolu_2", '{"city":"B"}')),
+        ),
+        Message(role="tool", tool_call_id="toolu_1", content="sunny"),
+        Message(role="tool", tool_call_id="toolu_2", content="rainy"),
+    ).json_body
+    assert body["messages"][1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "checking"},
+            {"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {"city": "A"}},
+            {"type": "tool_use", "id": "toolu_2", "name": "weather", "input": {"city": "B"}},
+        ],
+    }
+    assert body["messages"][2:] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny"},
+                {"type": "tool_result", "tool_use_id": "toolu_2", "content": "rainy"},
+            ],
+        }
+    ]
+
+
+def test_assistant_call_without_text_has_no_empty_text_block() -> None:
+    body = _build(
+        Message(role="assistant", content=None, tool_calls=_calls(("toolu_1", "{}")))
+    ).json_body
+    assert [b["type"] for b in body["messages"][0]["content"]] == ["tool_use"]
+
+
+@pytest.mark.parametrize("arguments", ["not json", "[1]", '"s"'])
+def test_arguments_that_are_not_a_json_object_are_rejected(arguments: str) -> None:
+    with pytest.raises(errors.BadRequestError):
+        _build(Message(role="assistant", tool_calls=_calls(("toolu_1", arguments))))
+
+
+def test_parse_returns_parallel_tool_calls_in_order_with_text() -> None:
+    body = {
+        **OK,
+        "content": [
+            {"type": "text", "text": "looking"},
+            {"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {"city": "A"}},
+            {"type": "tool_use", "id": "toolu_2", "name": "weather", "input": {"city": "B"}},
+        ],
+        "stop_reason": "tool_use",
+    }
+    choice = AnthropicAdapter().parse_response(_outcome(200, body)).choices[0]
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.content == "looking"
+    assert choice.message.tool_calls is not None
+    assert [c.id for c in choice.message.tool_calls] == ["toolu_1", "toolu_2"]
+    assert json.loads(choice.message.tool_calls[1].function.arguments) == {"city": "B"}
+    assert choice.message.tool_calls[0].type == "function"
+
+
+def test_tool_use_only_response_has_null_content() -> None:
+    body = {
+        **OK,
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "w", "input": {}}],
+        "stop_reason": "tool_use",
+    }
+    message = AnthropicAdapter().parse_response(_outcome(200, body)).choices[0].message
+    assert message.content is None
+    assert message.to_dict()["content"] is None
+
+
+def test_adapter_declares_tool_support() -> None:
+    assert AnthropicAdapter().capabilities().tools is True
+
+
+def test_non_string_arguments_are_rejected_not_raised_as_type_error() -> None:
+    call = ToolCall(id="toolu_1", function=FunctionCall(name="weather", arguments={"a": 1}))  # type: ignore[arg-type]
+    with pytest.raises(errors.BadRequestError):
+        _build(Message(role="assistant", tool_calls=[call]))

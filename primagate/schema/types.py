@@ -6,10 +6,11 @@ from typing import Any
 
 def _dump(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
+        keep_null = value.keep_null() if isinstance(value, _Serializable) else ()
         return {
             f.name: _dump(getattr(value, f.name))
             for f in fields(value)
-            if getattr(value, f.name) is not None
+            if getattr(value, f.name) is not None or f.name in keep_null
         }
     if isinstance(value, list):
         return [_dump(v) for v in value]
@@ -21,6 +22,10 @@ def _dump(value: Any) -> Any:
 class _Serializable:
     """Mirrors the OpenAI wire shape: unset (None) fields are omitted."""
 
+    def keep_null(self) -> tuple[str, ...]:
+        """Fields sent as an explicit null instead of being omitted."""
+        return ()
+
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = _dump(self)
         return out
@@ -30,10 +35,30 @@ class _Serializable:
 
 
 @dataclass
+class FunctionCall(_Serializable):
+    name: str
+    # A JSON object encoded as a string, as OpenAI sends it; adapters convert for other providers.
+    arguments: str
+
+
+@dataclass
+class ToolCall(_Serializable):
+    id: str
+    function: FunctionCall
+    type: str = "function"
+
+
+@dataclass
 class Message(_Serializable):
     role: str
     content: str | None = None
     name: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+
+    def keep_null(self) -> tuple[str, ...]:
+        # OpenAI rejects tool-call and tool-result messages that lack the content key.
+        return ("content",) if self.tool_calls or self.role == "tool" else ()
 
 
 @dataclass
@@ -47,6 +72,7 @@ class ChatCompletionRequest(_Serializable):
     stream: bool | None = None
     n: int | None = None
     seed: int | None = None
+    tools: list[dict[str, Any]] | None = None
 
 
 @dataclass

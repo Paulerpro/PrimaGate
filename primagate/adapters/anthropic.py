@@ -11,7 +11,9 @@ from primagate.schema.types import (
     ChatCompletion,
     ChatCompletionRequest,
     Choice,
+    FunctionCall,
     Message,
+    ToolCall,
     Usage,
 )
 from primagate.schema.wire import Capabilities, ProviderRequest, RawOutcome
@@ -24,7 +26,12 @@ API_VERSION = "2023-06-01"
 # The Messages API requires max_tokens, while the unified call treats it as optional.
 DEFAULT_MAX_TOKENS = 4096
 
-_STOP_REASONS = {"end_turn": "stop", "stop_sequence": "stop", "max_tokens": "length"}
+_STOP_REASONS = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_calls",
+}
 _BY_STATUS: dict[int, type[errors.PrimaGateError]] = {
     400: errors.BadRequestError,
     401: errors.AuthenticationError,
@@ -58,6 +65,8 @@ class AnthropicAdapter:
         }
         if system:
             body["system"] = system
+        if request.tools:
+            body["tools"] = [_tool(t) for t in request.tools]
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.top_p is not None:
@@ -81,6 +90,14 @@ class AnthropicAdapter:
         try:
             data = json.loads(outcome.body)
             texts = [b["text"] for b in data["content"] if b.get("type") == "text"]
+            calls = [
+                ToolCall(
+                    id=b["id"],
+                    function=FunctionCall(name=b["name"], arguments=json.dumps(b["input"])),
+                )
+                for b in data["content"]
+                if b.get("type") == "tool_use"
+            ]
             reason = data.get("stop_reason")
             usage = data["usage"]
             prompt, completion = usage["input_tokens"], usage["output_tokens"]
@@ -92,7 +109,9 @@ class AnthropicAdapter:
                     Choice(
                         index=0,
                         message=Message(
-                            role="assistant", content="".join(texts) if texts else None
+                            role="assistant",
+                            content="".join(texts) if texts else None,
+                            tool_calls=calls or None,
                         ),
                         finish_reason=_STOP_REASONS.get(reason, reason),
                     )
@@ -132,24 +151,73 @@ class AnthropicAdapter:
         return cls(message, llm_provider=PROVIDER, status_code=status)
 
     def capabilities(self) -> Capabilities:
-        return Capabilities()
+        return Capabilities(tools=True)
 
 
-def _split_messages(messages: list[Message]) -> tuple[str, list[dict[str, str]]]:
+def _tool(definition: dict[str, Any]) -> dict[str, Any]:
+    function = definition["function"]
+    out: dict[str, Any] = {"name": function["name"]}
+    if function.get("description"):
+        out["description"] = function["description"]
+    out["input_schema"] = function.get("parameters") or {"type": "object"}
+    return out
+
+
+def _tool_use(call: ToolCall) -> dict[str, Any]:
+    try:
+        arguments = json.loads(call.function.arguments)
+    except (ValueError, TypeError):
+        arguments = None
+    if not isinstance(arguments, dict):
+        raise errors.BadRequestError(
+            f"Arguments of tool call '{call.id}' must be a JSON object", llm_provider=PROVIDER
+        )
+    return {"type": "tool_use", "id": call.id, "name": call.function.name, "input": arguments}
+
+
+def _assistant_content(message: Message) -> str | list[dict[str, Any]]:
+    if not message.tool_calls:
+        return message.content or ""
+    blocks: list[dict[str, Any]] = []
+    if message.content:
+        blocks.append({"type": "text", "text": message.content})
+    blocks.extend(_tool_use(c) for c in message.tool_calls)
+    return blocks
+
+
+def _split_messages(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]:
     """Anthropic takes system text as a separate field, not as a message role."""
     system: list[str] = []
-    turns: list[dict[str, str]] = []
+    turns: list[dict[str, Any]] = []
     for message in messages:
         if message.role == "system":
             if message.content:
                 system.append(message.content)
-        elif message.role in ("user", "assistant"):
-            turns.append({"role": message.role, "content": message.content or ""})
+        elif message.role == "user":
+            turns.append({"role": "user", "content": message.content or ""})
+        elif message.role == "assistant":
+            turns.append({"role": "assistant", "content": _assistant_content(message)})
+        elif message.role == "tool":
+            result = {
+                "type": "tool_result",
+                "tool_use_id": message.tool_call_id,
+                "content": message.content or "",
+            }
+            # Every result for parallel calls must arrive in the single user turn that follows.
+            last = turns[-1] if turns else None
+            if last and last["role"] == "user" and _is_results(last["content"]):
+                last["content"].append(result)
+            else:
+                turns.append({"role": "user", "content": [result]})
         else:
             raise errors.BadRequestError(
                 f"Unsupported message role '{message.role}' for Anthropic", llm_provider=PROVIDER
             )
     return "\n\n".join(system), turns
+
+
+def _is_results(content: Any) -> bool:
+    return isinstance(content, list) and all(b["type"] == "tool_result" for b in content)
 
 
 def _created(headers: dict[str, str]) -> int:

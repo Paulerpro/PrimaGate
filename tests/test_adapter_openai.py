@@ -7,7 +7,7 @@ import pytest
 import primagate.adapters.openai as openai_adapter
 from primagate.adapters.openai import OpenAIAdapter
 from primagate.schema import errors
-from primagate.schema.types import ChatCompletionRequest, Message
+from primagate.schema.types import ChatCompletionRequest, FunctionCall, Message, ToolCall
 from primagate.schema.wire import RawOutcome
 
 
@@ -137,3 +137,62 @@ def test_non_string_error_code_does_not_crash(code: object) -> None:
 def test_empty_provider_message_falls_back_to_body(message: object) -> None:
     out = _outcome(400, {"error": {"message": message, "code": None}})
     assert OpenAIAdapter().map_error(out).message not in ("None", "")
+
+
+TOOLS = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]
+
+
+def test_tools_and_tool_messages_are_sent_in_the_unified_shape() -> None:
+    call = ToolCall(id="call_1", function=FunctionCall(name="f", arguments='{"a":1}'))
+    req = ChatCompletionRequest(
+        model="gpt-4o",
+        messages=[
+            Message(role="user", content="hi"),
+            Message(role="assistant", tool_calls=[call]),
+            Message(role="tool", tool_call_id="call_1", content="42"),
+        ],
+        tools=TOOLS,
+    )
+    body = OpenAIAdapter().build_request(req, api_key="k", base_url="https://x.test/v1").json_body
+    assert body["tools"] == TOOLS
+    assert body["messages"][1] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": '{"a":1}'}}
+        ],
+    }
+    assert body["messages"][2] == {"role": "tool", "content": "42", "tool_call_id": "call_1"}
+
+
+def test_parse_returns_parallel_tool_calls_in_order() -> None:
+    calls = [
+        {
+            "id": f"call_{i}",
+            "type": "function",
+            "function": {"name": "f", "arguments": f'{{"i":{i}}}'},
+        }
+        for i in range(3)
+    ]
+    body = {
+        "id": "chatcmpl-1",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": calls},
+            }
+        ],
+    }
+    choice = OpenAIAdapter().parse_response(_outcome(200, body)).choices[0]
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.content is None
+    assert choice.message.tool_calls is not None
+    assert [c.id for c in choice.message.tool_calls] == ["call_0", "call_1", "call_2"]
+    assert choice.message.tool_calls[1].function.arguments == '{"i":1}'
+
+
+def test_adapter_declares_tool_support() -> None:
+    assert OpenAIAdapter().capabilities().tools is True

@@ -9,7 +9,9 @@ from primagate.schema.types import (
     ChatCompletion,
     ChatCompletionRequest,
     Choice,
+    FunctionCall,
     Message,
+    ToolCall,
     Usage,
 )
 from primagate.schema.wire import Capabilities, ProviderRequest, RawOutcome
@@ -84,14 +86,22 @@ class OpenAIAdapter:
         return cls(message, llm_provider=PROVIDER, status_code=status)
 
     def capabilities(self) -> Capabilities:
-        return Capabilities()
+        return Capabilities(tools=True)
 
 
 def _choice(raw: dict[str, Any]) -> Choice:
     msg = raw["message"]
+    calls = [
+        ToolCall(
+            id=c["id"],
+            type=c.get("type", "function"),
+            function=FunctionCall(name=c["function"]["name"], arguments=c["function"]["arguments"]),
+        )
+        for c in msg.get("tool_calls") or []
+    ]
     return Choice(
         index=raw["index"],
-        message=Message(role=msg["role"], content=msg.get("content")),
+        message=Message(role=msg["role"], content=msg.get("content"), tool_calls=calls or None),
         finish_reason=raw.get("finish_reason"),
     )
 

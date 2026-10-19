@@ -13,6 +13,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Paul", email = "nrpaulsilas@gmail.com" }]
 dependencies = [
     "httpx2>=2.13,<3",
+    "typing-extensions>=4.16.0",
 ]
 
 [dependency-groups]

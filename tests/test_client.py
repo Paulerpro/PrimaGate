@@ -438,3 +438,107 @@ def test_client_module_carries_no_openai_literals() -> None:
 
     source = Path(client_module.__file__).read_text(encoding="utf-8")
     assert "openai" not in source.lower()
+
+
+TOOL = {"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}
+
+
+def test_tool_definitions_and_dict_tool_messages_reach_the_wire(call: Caller) -> None:
+    gate, calls = _gate()
+    call(
+        gate,
+        model="gpt-4o",
+        messages=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "42"},
+        ],
+        tools=[TOOL],
+    )
+    sent = json.loads(calls[0].content)
+    assert sent["tools"] == [TOOL]
+    assert sent["messages"][1]["content"] is None
+    assert sent["messages"][1]["tool_calls"][0]["id"] == "c1"
+    assert sent["messages"][2] == {"role": "tool", "content": "42", "tool_call_id": "c1"}
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [{"type": "other", "function": {"name": "f"}}],
+        [{"type": "function"}],
+        [{"type": "function", "function": {"description": "no name"}}],
+        ["f"],
+        "f",
+    ],
+)
+def test_bad_tool_definition_raises_before_any_request(call: Caller, tools: object) -> None:
+    gate, calls = _gate()
+    with pytest.raises(errors.BadRequestError):
+        call(gate, model="gpt-4o", messages=MSGS, tools=tools)
+    assert calls == []
+
+
+def test_tool_message_without_an_id_raises_before_any_request(call: Caller) -> None:
+    gate, calls = _gate()
+    with pytest.raises(errors.BadRequestError, match="tool_call_id"):
+        call(gate, model="gpt-4o", messages=[{"role": "tool", "content": "42"}])
+    assert calls == []
+
+
+def test_misspelled_keyword_is_rejected(call: Caller) -> None:
+    gate, calls = _gate()
+    with pytest.raises(TypeError, match="temprature"):
+        call(gate, model="gpt-4o", messages=MSGS, temprature=0.1)
+    assert calls == []
+
+
+def test_missing_model_is_rejected(call: Caller) -> None:
+    gate, calls = _gate()
+    with pytest.raises(TypeError, match="model"):
+        call(gate, messages=MSGS)
+    assert calls == []
+
+
+def test_empty_tools_list_sends_no_tools_key(call: Caller) -> None:
+    gate, calls = _gate()
+    call(gate, model="gpt-4o", messages=MSGS, tools=[])
+    assert "tools" not in json.loads(calls[0].content)
+
+
+@pytest.mark.parametrize(
+    "tool_call",
+    [
+        {"id": "c1", "function": {"name": "f", "arguments": {"a": 1}}},
+        {"id": "c1", "function": {"name": "f", "arguments": None}},
+        {"id": 1, "function": {"name": "f", "arguments": "{}"}},
+        {"function": {"name": "f", "arguments": "{}"}},
+    ],
+)
+def test_malformed_tool_call_raises_before_any_request(call: Caller, tool_call: dict) -> None:  # type: ignore[type-arg]
+    gate, calls = _gate()
+    with pytest.raises(errors.BadRequestError):
+        call(
+            gate,
+            model="gpt-4o",
+            messages=[{"role": "assistant", "content": None, "tool_calls": [tool_call]}],
+        )
+    assert calls == []
+
+
+def test_tool_name_must_be_a_string(call: Caller) -> None:
+    gate, calls = _gate()
+    with pytest.raises(errors.BadRequestError):
+        call(
+            gate,
+            model="gpt-4o",
+            messages=MSGS,
+            tools=[{"type": "function", "function": {"name": 5}}],
+        )
+    assert calls == []

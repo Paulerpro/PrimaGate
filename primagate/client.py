@@ -2,19 +2,40 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import Any, Required, TypedDict, cast
 
 import httpx2
+from typing_extensions import Unpack
 
 from primagate.drivers.async_ import AsyncDriver
 from primagate.drivers.providers import check_provider_names
 from primagate.drivers.sync import SyncDriver
 from primagate.schema.errors import BadRequestError, PrimaGateError
-from primagate.schema.types import ChatCompletion, ChatCompletionRequest, Message
+from primagate.schema.types import (
+    ChatCompletion,
+    ChatCompletionRequest,
+    FunctionCall,
+    Message,
+    ToolCall,
+)
 
 DEFAULT_TIMEOUT = 60.0
 
-MessageInput = Message | Mapping[str, str | None]
+MessageInput = Message | Mapping[str, Any]
+
+
+class CallParams(TypedDict, total=False):
+    """The one place the call's parameters are spelled out."""
+
+    model: Required[str]
+    messages: Required[Sequence[MessageInput]]
+    temperature: float | None
+    top_p: float | None
+    max_tokens: int | None
+    stop: str | list[str] | None
+    n: int | None
+    seed: int | None
+    tools: Sequence[Mapping[str, Any]] | None
 
 
 class PrimaGate:
@@ -43,37 +64,13 @@ class PrimaGate:
     def __repr__(self) -> str:
         return f"PrimaGate(closed={self._closed})"
 
-    def completion(
-        self,
-        *,
-        model: str,
-        messages: Sequence[MessageInput],
-        temperature: float | None = None,
-        top_p: float | None = None,
-        max_tokens: int | None = None,
-        stop: str | list[str] | None = None,
-        n: int | None = None,
-        seed: int | None = None,
-    ) -> ChatCompletion:
+    def completion(self, **params: Unpack[CallParams]) -> ChatCompletion:
         driver = self._get_driver()
-        request = _request(model, messages, temperature, top_p, max_tokens, stop, n, seed)
-        return driver.run(request)
+        return driver.run(_request(params))
 
-    async def acompletion(
-        self,
-        *,
-        model: str,
-        messages: Sequence[MessageInput],
-        temperature: float | None = None,
-        top_p: float | None = None,
-        max_tokens: int | None = None,
-        stop: str | list[str] | None = None,
-        n: int | None = None,
-        seed: int | None = None,
-    ) -> ChatCompletion:
+    async def acompletion(self, **params: Unpack[CallParams]) -> ChatCompletion:
         driver = self._get_async_driver()
-        request = _request(model, messages, temperature, top_p, max_tokens, stop, n, seed)
-        return await driver.run(request)
+        return await driver.run(_request(params))
 
     def close(self) -> None:
         """Close the sync client. Async clients are released by `aclose()`."""
@@ -120,36 +117,101 @@ class PrimaGate:
             raise PrimaGateError("PrimaGate instance is closed")
 
 
-def _request(
-    model: str,
-    messages: Sequence[MessageInput],
-    temperature: float | None,
-    top_p: float | None,
-    max_tokens: int | None,
-    stop: str | list[str] | None,
-    n: int | None,
-    seed: int | None,
-) -> ChatCompletionRequest:
+# Spelled out because postponed annotations hide Required[] from TypedDict introspection.
+_REQUIRED_PARAMS = frozenset({"model", "messages"})
+_PARAM_NAMES = frozenset(CallParams.__annotations__)
+
+
+def _request(params: CallParams) -> ChatCompletionRequest:
+    # **params no longer lets Python reject a misspelled or missing keyword, so do it here.
+    unknown = sorted(params.keys() - _PARAM_NAMES)
+    if unknown:
+        raise TypeError(f"Unexpected keyword argument(s): {', '.join(unknown)}")
+    for required in sorted(_REQUIRED_PARAMS - params.keys()):
+        raise TypeError(f"Missing required keyword argument: '{required}'")
+    messages = params["messages"]
     if isinstance(messages, str | bytes):
         raise BadRequestError("messages must be a list of messages")
     return ChatCompletionRequest(
-        model=model,
+        model=params["model"],
         messages=[_message(m) for m in messages],
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        stop=stop,
-        n=n,
-        seed=seed,
+        temperature=params.get("temperature"),
+        top_p=params.get("top_p"),
+        max_tokens=params.get("max_tokens"),
+        stop=params.get("stop"),
+        n=params.get("n"),
+        seed=params.get("seed"),
+        tools=_tools(params.get("tools")),
     )
 
 
 def _message(value: MessageInput) -> Message:
     if isinstance(value, Message):
-        return value
-    if not isinstance(value, Mapping) or not value.get("role"):
+        message = value
+    elif isinstance(value, Mapping) and value.get("role"):
+        message = Message(
+            role=str(value["role"]),
+            content=value.get("content"),
+            name=value.get("name"),
+            tool_calls=_tool_calls(value.get("tool_calls")),
+            tool_call_id=value.get("tool_call_id"),
+        )
+    else:
         raise BadRequestError("Each message needs a 'role'")
-    return Message(role=str(value["role"]), content=value.get("content"), name=value.get("name"))
+    if message.role == "tool" and not message.tool_call_id:
+        raise BadRequestError("A 'tool' message needs a 'tool_call_id'")
+    return message
+
+
+def _tool_calls(raw: Sequence[ToolCall | Mapping[str, Any]] | None) -> list[ToolCall] | None:
+    if not raw:
+        return None
+    calls: list[ToolCall] = []
+    for item in raw:
+        if isinstance(item, ToolCall):
+            calls.append(item)
+            continue
+        try:
+            function = item["function"]
+            call = ToolCall(
+                id=item["id"],
+                type=item.get("type", "function"),
+                function=FunctionCall(name=function["name"], arguments=function["arguments"]),
+            )
+            valid = all(
+                isinstance(v, str) for v in (call.id, call.function.name, call.function.arguments)
+            )
+        except (KeyError, TypeError, AttributeError):
+            valid = False
+        if not valid:
+            raise BadRequestError(
+                "Each tool call needs string 'id', 'function.name' and 'function.arguments'"
+            )
+        calls.append(call)
+    return calls
+
+
+def _tools(raw: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str | bytes) or not isinstance(raw, Sequence):
+        raise BadRequestError("tools must be a list of tool definitions")
+    tools: list[dict[str, Any]] = []
+    for tool in raw:
+        function = tool.get("function") if isinstance(tool, Mapping) else None
+        name = function.get("name") if isinstance(function, Mapping) else None
+        if (
+            not isinstance(tool, Mapping)
+            or tool.get("type") != "function"
+            or not isinstance(name, str)
+            or not name
+        ):
+            raise BadRequestError(
+                "Each tool must be {'type': 'function', 'function': {'name': ..., ...}}"
+            )
+        tools.append(dict(tool))
+    # An empty list means no tools; some providers reject an explicit empty "tools" array.
+    return tools or None
 
 
 _default: PrimaGate | None = None
@@ -164,47 +226,9 @@ def get_default() -> PrimaGate:
         return _default
 
 
-def completion(
-    *,
-    model: str,
-    messages: Sequence[MessageInput],
-    temperature: float | None = None,
-    top_p: float | None = None,
-    max_tokens: int | None = None,
-    stop: str | list[str] | None = None,
-    n: int | None = None,
-    seed: int | None = None,
-) -> ChatCompletion:
-    return get_default().completion(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        stop=stop,
-        n=n,
-        seed=seed,
-    )
+def completion(**params: Unpack[CallParams]) -> ChatCompletion:
+    return get_default().completion(**params)
 
 
-async def acompletion(
-    *,
-    model: str,
-    messages: Sequence[MessageInput],
-    temperature: float | None = None,
-    top_p: float | None = None,
-    max_tokens: int | None = None,
-    stop: str | list[str] | None = None,
-    n: int | None = None,
-    seed: int | None = None,
-) -> ChatCompletion:
-    return await get_default().acompletion(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        stop=stop,
-        n=n,
-        seed=seed,
-    )
+async def acompletion(**params: Unpack[CallParams]) -> ChatCompletion:
+    return await get_default().acompletion(**params)
