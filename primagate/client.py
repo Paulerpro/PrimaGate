@@ -36,6 +36,7 @@ class CallParams(TypedDict, total=False):
     n: int | None
     seed: int | None
     tools: Sequence[Mapping[str, Any]] | None
+    response_format: Mapping[str, Any] | type | None
 
 
 class PrimaGate:
@@ -142,6 +143,7 @@ def _request(params: CallParams) -> ChatCompletionRequest:
         n=params.get("n"),
         seed=params.get("seed"),
         tools=_tools(params.get("tools")),
+        response_format=_response_format(params.get("response_format")),
     )
 
 
@@ -212,6 +214,32 @@ def _tools(raw: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]] | No
         tools.append(dict(tool))
     # An empty list means no tools; some providers reject an explicit empty "tools" array.
     return tools or None
+
+
+def _response_format(raw: Mapping[str, Any] | type | None) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    # Duck-typed so pydantic is never imported; any class exposing the method works.
+    schema_of = getattr(raw, "model_json_schema", None)
+    if isinstance(raw, type) and callable(schema_of):
+        return {"type": "json_schema", "json_schema": {"name": raw.__name__, "schema": schema_of()}}
+    if not isinstance(raw, Mapping):
+        raise BadRequestError("response_format must be a dict or a class with model_json_schema()")
+    kind = raw.get("type")
+    if kind == "text":
+        return None
+    if kind == "json_object":
+        return dict(raw)
+    if kind != "json_schema":
+        raise BadRequestError("response_format type must be 'json_schema', 'json_object' or 'text'")
+    spec = raw.get("json_schema")
+    name = spec.get("name") if isinstance(spec, Mapping) else None
+    schema = spec.get("schema") if isinstance(spec, Mapping) else None
+    if not isinstance(name, str) or not name or not isinstance(schema, Mapping):
+        raise BadRequestError(
+            "A json_schema response_format needs json_schema.name and json_schema.schema"
+        )
+    return dict(raw)
 
 
 _default: PrimaGate | None = None

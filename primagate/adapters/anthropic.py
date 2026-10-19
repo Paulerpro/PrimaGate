@@ -67,6 +67,8 @@ class AnthropicAdapter:
             body["system"] = system
         if request.tools:
             body["tools"] = [_tool(t) for t in request.tools]
+        if request.response_format:
+            body["output_config"] = {"format": _output_format(request.response_format)}
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.top_p is not None:
@@ -151,7 +153,38 @@ class AnthropicAdapter:
         return cls(message, llm_provider=PROVIDER, status_code=status)
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(tools=True)
+        return Capabilities(tools=True, structured_output=True)
+
+
+def _output_format(response_format: dict[str, Any]) -> dict[str, Any]:
+    if response_format.get("type") != "json_schema":
+        raise errors.UnsupportedParamsError(
+            "Anthropic structured output needs a JSON schema; json_object has none to enforce",
+            llm_provider=PROVIDER,
+        )
+    return {
+        "type": "json_schema",
+        "schema": _closed(response_format["json_schema"]["schema"]),
+    }
+
+
+def _closed(schema: Any) -> Any:
+    """Anthropic rejects object schemas that do not set additionalProperties; pydantic omits it."""
+    if not isinstance(schema, dict):
+        return schema
+    out = dict(schema)
+    if (out.get("type") == "object" or "properties" in out) and "additionalProperties" not in out:
+        out["additionalProperties"] = False
+    for key in ("properties", "$defs", "definitions"):
+        if isinstance(out.get(key), dict):
+            out[key] = {name: _closed(sub) for name, sub in out[key].items()}
+    for key in ("items", "additionalProperties"):
+        if isinstance(out.get(key), dict):
+            out[key] = _closed(out[key])
+    for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
+        if isinstance(out.get(key), list):
+            out[key] = [_closed(sub) for sub in out[key]]
+    return out
 
 
 def _tool(definition: dict[str, Any]) -> dict[str, Any]:

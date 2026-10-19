@@ -542,3 +542,72 @@ def test_tool_name_must_be_a_string(call: Caller) -> None:
             tools=[{"type": "function", "function": {"name": 5}}],
         )
     assert calls == []
+
+
+SCHEMA = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+JSON_SCHEMA_FORMAT = {"type": "json_schema", "json_schema": {"name": "place", "schema": SCHEMA}}
+
+
+class _Place:
+    """Stands in for a pydantic model; the SDK must only call model_json_schema()."""
+
+    @classmethod
+    def model_json_schema(cls) -> dict[str, object]:
+        return SCHEMA
+
+
+def _sent_format(calls: list[httpx2.Request]) -> object:
+    return json.loads(calls[0].content).get("response_format")
+
+
+def test_json_schema_response_format_is_sent_as_given(call: Caller) -> None:
+    gate, calls = _gate()
+    call(gate, model="gpt-4o", messages=MSGS, response_format=JSON_SCHEMA_FORMAT)
+    assert _sent_format(calls) == JSON_SCHEMA_FORMAT
+
+
+def test_class_response_format_reads_its_schema(call: Caller) -> None:
+    gate, calls = _gate()
+    call(gate, model="gpt-4o", messages=MSGS, response_format=_Place)
+    assert _sent_format(calls) == {
+        "type": "json_schema",
+        "json_schema": {"name": "_Place", "schema": SCHEMA},
+    }
+
+
+def test_text_response_format_is_treated_as_unset(call: Caller) -> None:
+    gate, calls = _gate()
+    call(gate, model="gpt-4o", messages=MSGS, response_format={"type": "text"})
+    assert _sent_format(calls) is None
+
+
+def test_json_object_response_format_is_sent_to_openai(call: Caller) -> None:
+    gate, calls = _gate()
+    call(gate, model="gpt-4o", messages=MSGS, response_format={"type": "json_object"})
+    assert _sent_format(calls) == {"type": "json_object"}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "json",
+        {"type": "xml"},
+        {"type": "json_schema"},
+        {"type": "json_schema", "json_schema": {"name": "p"}},
+        {"type": "json_schema", "json_schema": {"schema": SCHEMA}},
+        {"type": "json_schema", "json_schema": {"name": "p", "schema": "x"}},
+    ],
+)
+def test_bad_response_format_raises_before_any_request(call: Caller, bad: object) -> None:
+    gate, calls = _gate()
+    with pytest.raises(errors.BadRequestError):
+        call(gate, model="gpt-4o", messages=MSGS, response_format=bad)
+    assert calls == []
+
+
+def test_pydantic_is_never_imported() -> None:
+    import subprocess
+    import sys
+
+    code = "import primagate, sys; sys.exit('pydantic' in sys.modules)"
+    assert subprocess.run([sys.executable, "-I", "-c", code]).returncode == 0

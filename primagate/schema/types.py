@@ -73,6 +73,7 @@ class ChatCompletionRequest(_Serializable):
     n: int | None = None
     seed: int | None = None
     tools: list[dict[str, Any]] | None = None
+    response_format: dict[str, Any] | None = None
 
 
 @dataclass

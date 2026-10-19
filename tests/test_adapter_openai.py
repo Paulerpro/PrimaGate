@@ -196,3 +196,7 @@ def test_parse_returns_parallel_tool_calls_in_order() -> None:
 
 def test_adapter_declares_tool_support() -> None:
     assert OpenAIAdapter().capabilities().tools is True
+
+
+def test_structured_output_capability() -> None:
+    assert OpenAIAdapter().capabilities().structured_output is True

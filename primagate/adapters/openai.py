@@ -86,7 +86,7 @@ class OpenAIAdapter:
         return cls(message, llm_provider=PROVIDER, status_code=status)
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(tools=True)
+        return Capabilities(tools=True, structured_output=True)
 
 
 def _choice(raw: dict[str, Any]) -> Choice:

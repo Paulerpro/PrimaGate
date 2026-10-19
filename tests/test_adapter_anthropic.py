@@ -334,3 +334,48 @@ def test_non_string_arguments_are_rejected_not_raised_as_type_error() -> None:
     call = ToolCall(id="toolu_1", function=FunctionCall(name="weather", arguments={"a": 1}))  # type: ignore[arg-type]
     with pytest.raises(errors.BadRequestError):
         _build(Message(role="assistant", tool_calls=[call]))
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "object", "properties": {}}},
+        "open": {"type": "object", "additionalProperties": True},
+    },
+    "$defs": {"Inner": {"type": "object", "properties": {"x": {"type": "integer"}}}},
+    "anyOf": [{"type": "object", "properties": {}}, {"type": "null"}],
+}
+
+
+def _format(schema: dict[str, object]) -> dict[str, object]:
+    return {"type": "json_schema", "json_schema": {"name": "p", "schema": schema}}
+
+
+def test_json_schema_becomes_output_config_with_closed_objects() -> None:
+    original = json.loads(json.dumps(SCHEMA))
+    body = _build(Message(role="user", content="hi"), response_format=_format(SCHEMA)).json_body
+    fmt = body["output_config"]["format"]
+    assert fmt["type"] == "json_schema"
+    schema = fmt["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["tags"]["items"]["additionalProperties"] is False
+    assert schema["$defs"]["Inner"]["additionalProperties"] is False
+    assert schema["anyOf"][0]["additionalProperties"] is False
+    assert schema["anyOf"][1] == {"type": "null"}
+    # An explicit value is the caller's choice.
+    assert schema["properties"]["open"]["additionalProperties"] is True
+    assert SCHEMA == original
+
+
+def test_json_object_response_format_is_unsupported() -> None:
+    with pytest.raises(errors.UnsupportedParamsError):
+        _build(Message(role="user", content="hi"), response_format={"type": "json_object"})
+
+
+def test_no_response_format_sends_no_output_config() -> None:
+    assert "output_config" not in _build(Message(role="user", content="hi")).json_body
+
+
+def test_structured_output_capability() -> None:
+    assert AnthropicAdapter().capabilities().structured_output is True
