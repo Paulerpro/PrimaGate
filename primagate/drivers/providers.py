@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from primagate.adapters import anthropic, openai
+from primagate.core.call import parse_drop_params
 from primagate.core.ports import Adapter
 from primagate.schema.errors import AuthenticationError, BadRequestError
 from primagate.schema.wire import ProviderSettings
@@ -41,6 +42,10 @@ def check_provider_names(label: str, names: Mapping[str, object]) -> None:
     if unknown:
         known = ", ".join(sorted(BUILTIN_PROVIDERS))
         raise BadRequestError(f"{label} names unknown provider '{unknown[0]}' (known: {known})")
+
+
+def check_drop_params(value: object) -> None:
+    parse_drop_params(value)
 
 
 class SettingsResolver:

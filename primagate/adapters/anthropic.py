@@ -172,7 +172,12 @@ class AnthropicAdapter:
         return cls(message, llm_provider=PROVIDER, status_code=status)
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(tools=True, structured_output=True, streaming=True)
+        return Capabilities(
+            tools=True,
+            structured_output=True,
+            streaming=True,
+            unsupported_hints=frozenset({"n", "seed"}),
+        )
 
 
 def _output_format(response_format: dict[str, Any]) -> dict[str, Any]:

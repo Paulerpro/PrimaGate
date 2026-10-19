@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any
 
 
@@ -91,6 +91,13 @@ class Choice(_Serializable):
 
 
 @dataclass
+class Metadata(_Serializable):
+    """What the SDK did to a call beyond relaying it; absent when there is nothing to report."""
+
+    dropped_params: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ChatCompletion(_Serializable):
     id: str
     created: int
@@ -98,6 +105,7 @@ class ChatCompletion(_Serializable):
     choices: list[Choice]
     usage: Usage | None = None
     object: str = "chat.completion"
+    metadata: Metadata | None = None
 
 
 @dataclass
@@ -137,3 +145,4 @@ class ChatCompletionChunk(_Serializable):
     choices: list[ChunkChoice]
     usage: Usage | None = None
     object: str = "chat.completion.chunk"
+    metadata: Metadata | None = None

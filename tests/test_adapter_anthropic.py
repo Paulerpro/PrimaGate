@@ -6,6 +6,7 @@ import pytest
 
 import primagate.adapters.anthropic as anthropic_adapter
 from primagate.adapters.anthropic import AnthropicAdapter
+from primagate.adapters.openai import OpenAIAdapter
 from primagate.schema import errors
 from primagate.schema.types import ChatCompletionRequest, FunctionCall, Message, ToolCall
 from primagate.schema.wire import RawEvent, RawOutcome
@@ -470,3 +471,8 @@ def test_stream_parser_rejects_a_stop_without_a_stop_reason() -> None:
 
 def test_images_capability_is_off() -> None:
     assert AnthropicAdapter().capabilities().images is False
+
+
+def test_declares_the_hint_params_it_cannot_honor() -> None:
+    assert AnthropicAdapter().capabilities().unsupported_hints == {"n", "seed"}
+    assert OpenAIAdapter().capabilities().unsupported_hints == frozenset()

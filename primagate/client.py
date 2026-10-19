@@ -8,7 +8,7 @@ import httpx2
 from typing_extensions import Unpack
 
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
-from primagate.drivers.providers import check_provider_names
+from primagate.drivers.providers import check_drop_params, check_provider_names
 from primagate.drivers.sync import SyncDriver, SyncStream
 from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.types import (
@@ -22,6 +22,7 @@ from primagate.schema.types import (
 DEFAULT_TIMEOUT = 60.0
 
 MessageInput = Message | Mapping[str, Any]
+DropParams = bool | Sequence[str] | None
 
 
 class CallParams(TypedDict, total=False):
@@ -37,6 +38,7 @@ class CallParams(TypedDict, total=False):
     seed: int | None
     tools: Sequence[Mapping[str, Any]] | None
     response_format: Mapping[str, Any] | type | None
+    drop_params: DropParams
 
 
 class PlainCallParams(CallParams, total=False):
@@ -60,11 +62,14 @@ class PrimaGate:
         *,
         base_urls: Mapping[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        drop_params: DropParams = None,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
         check_provider_names("api_keys", api_keys or {})
         check_provider_names("base_urls", base_urls or {})
+        check_drop_params(drop_params)
+        self._drop_params = drop_params
         self._api_keys = dict(api_keys or {})
         self._base_urls = dict(base_urls or {})
         self._timeout = timeout
@@ -91,8 +96,10 @@ class PrimaGate:
 
     def _completion(self, params: AnyCallParams) -> ChatCompletion | SyncStream:
         driver = self._get_driver()
-        request = _request(params)
-        return driver.stream(request) if request.stream else driver.run(request)
+        request, drop = _request(params), self._effective_drop_params(params)
+        if request.stream:
+            return driver.stream(request, drop)
+        return driver.run(request, drop)
 
     @overload
     async def acompletion(self, **params: Unpack[StreamCallParams]) -> AsyncStream: ...
@@ -110,8 +117,15 @@ class PrimaGate:
 
     async def _acompletion(self, params: AnyCallParams) -> ChatCompletion | AsyncStream:
         driver = self._get_async_driver()
-        request = _request(params)
-        return await driver.stream(request) if request.stream else await driver.run(request)
+        request, drop = _request(params), self._effective_drop_params(params)
+        if request.stream:
+            return await driver.stream(request, drop)
+        return await driver.run(request, drop)
+
+    def _effective_drop_params(self, params: AnyCallParams) -> DropParams:
+        # Only None means unset, so False and [] switch an inherited opt-in off for one call.
+        value = params.get("drop_params")
+        return self._drop_params if value is None else value
 
     def close(self) -> None:
         """Close the sync client. Async clients are released by `aclose()`."""
@@ -283,6 +297,16 @@ def _response_format(raw: Mapping[str, Any] | type | None) -> dict[str, Any] | N
     return dict(raw)
 
 
+def _with_module_drop_params(params: AnyCallParams) -> AnyCallParams:
+    """The module-level setting stands in for the default instance's own, read on every call."""
+    import primagate
+
+    module_value = getattr(primagate, "drop_params", None)
+    if params.get("drop_params") is None and module_value is not None:
+        return cast(AnyCallParams, {**params, "drop_params": module_value})
+    return params
+
+
 _default: PrimaGate | None = None
 _default_lock = threading.Lock()
 
@@ -308,7 +332,7 @@ def completion(**params: Unpack[AnyCallParams]) -> ChatCompletion | SyncStream: 
 
 
 def completion(**params: Unpack[AnyCallParams]) -> ChatCompletion | SyncStream:
-    return get_default()._completion(params)
+    return get_default()._completion(_with_module_drop_params(params))
 
 
 @overload
@@ -324,4 +348,4 @@ async def acompletion(**params: Unpack[AnyCallParams]) -> ChatCompletion | Async
 
 
 async def acompletion(**params: Unpack[AnyCallParams]) -> ChatCompletion | AsyncStream:
-    return await get_default()._acompletion(params)
+    return await get_default()._acompletion(_with_module_drop_params(params))

@@ -53,6 +53,8 @@ class Capabilities:
     structured_output: bool = False
     images: bool = False
     streaming: bool = False
+    # Hint-type parameters (not behavior features) the provider cannot honor.
+    unsupported_hints: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

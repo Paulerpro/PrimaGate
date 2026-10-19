@@ -10,6 +10,7 @@ from primagate.schema.types import ChatCompletion, ChatCompletionRequest
 class Dispatch:
     provider: str
     request: ChatCompletionRequest
+    dropped_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -34,3 +35,4 @@ class DispatchOutcome:
 
     response: ChatCompletion | None = None
     error: PrimaGateError | None = None
+    dropped_params: tuple[str, ...] = ()

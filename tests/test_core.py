@@ -3,7 +3,14 @@ import dataclasses
 import pytest
 
 from primagate.core import steps
-from primagate.core.call import first_action, next_action, resolve_model
+from primagate.core.call import (
+    DropPolicy,
+    apply_drops,
+    first_action,
+    next_action,
+    parse_drop_params,
+    resolve_model,
+)
 from primagate.schema.errors import BadRequestError, RateLimitError, UnsupportedParamsError
 from primagate.schema.types import (
     ChatCompletion,
@@ -167,3 +174,56 @@ def test_check_uses_the_target_providers_capabilities() -> None:
 def test_provider_without_an_adapter_raises_a_gate_error() -> None:
     action = first_action(_request(), {})
     assert isinstance(action, steps.Raise) and "openai" in action.error.message
+
+
+@pytest.mark.parametrize(
+    ("value", "policy"),
+    [
+        (None, DropPolicy()),
+        (False, DropPolicy()),
+        ([], DropPolicy()),
+        (True, DropPolicy(hints=True)),
+        (["tools", "image"], DropPolicy(features=frozenset({"tools", "image"}))),
+    ],
+)
+def test_parse_drop_params_accepts(value: object, policy: DropPolicy) -> None:
+    assert parse_drop_params(value) == policy
+
+
+@pytest.mark.parametrize("value", ["tools", ["nope"], [1], 3, {"tools"}, ["tools", None]])
+def test_parse_drop_params_rejects(value: object) -> None:
+    with pytest.raises(BadRequestError, match="drop_params"):
+        parse_drop_params(value)
+
+
+def test_apply_drops_leaves_the_callers_request_alone() -> None:
+    request = _with(tools=[TOOL], messages=[IMAGE_MESSAGE])
+    policy = DropPolicy(features=frozenset({"tools", "image"}))
+    changed, dropped = apply_drops(request, BARE, policy)
+    assert dropped == ["tools", "image"]
+    assert request.tools == [TOOL] and request.messages == [IMAGE_MESSAGE]
+    assert changed.tools is None and changed.messages[0].content == [
+        {"type": "text", "text": "what?"}
+    ]
+
+
+def test_apply_drops_only_hints_the_adapter_declares() -> None:
+    request = _with(n=3, seed=7)
+    only_seed = Capabilities(unsupported_hints=frozenset({"seed"}))
+    changed, dropped = apply_drops(request, only_seed, DropPolicy(hints=True))
+    assert dropped == ["seed"] and changed.n == 3 and changed.seed is None
+    assert apply_drops(request, only_seed, DropPolicy())[1] == []
+
+
+def test_dispatch_records_what_was_dropped_and_the_response_names_it() -> None:
+    action = first_action(
+        _with(tools=[TOOL]), {"openai": BARE}, DropPolicy(features=frozenset({"tools"}))
+    )
+    assert isinstance(action, steps.Dispatch) and action.dropped_params == ("tools",)
+    outcome = steps.DispatchOutcome(response=_response(), dropped_params=action.dropped_params)
+    returned = next_action(outcome)
+    assert isinstance(returned, steps.Return)
+    assert returned.response.metadata is not None
+    assert returned.response.metadata.dropped_params == ["tools"]
+    clean = next_action(steps.DispatchOutcome(response=_response()))
+    assert isinstance(clean, steps.Return) and clean.response.metadata is None

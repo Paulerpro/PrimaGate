@@ -7,7 +7,7 @@ from typing import Any, ClassVar, Self
 import httpx2
 
 from primagate.core import steps
-from primagate.core.call import first_action, next_action
+from primagate.core.call import first_action, next_action, parse_drop_params
 from primagate.core.ports import Adapter
 from primagate.drivers._shared import END, Finished, Step, StreamState, prepare, settle
 from primagate.drivers.providers import SettingsResolver, SettingsSource, builtin_adapters
@@ -114,16 +114,16 @@ class SyncDriver:
     def close(self) -> None:
         self._transport.close()
 
-    def run(self, request: ChatCompletionRequest) -> ChatCompletion:
-        action = first_action(request, self._capabilities)
+    def run(self, request: ChatCompletionRequest, drop_params: object = None) -> ChatCompletion:
+        action = first_action(request, self._capabilities, parse_drop_params(drop_params))
         while True:
             step = self.perform(action)
             if isinstance(step, Finished):
                 return step.response
             action = next_action(step)
 
-    def stream(self, request: ChatCompletionRequest) -> SyncStream:
-        action = first_action(request, self._capabilities)
+    def stream(self, request: ChatCompletionRequest, drop_params: object = None) -> SyncStream:
+        action = first_action(request, self._capabilities, parse_drop_params(drop_params))
         if not isinstance(action, steps.Dispatch):
             self.perform(action)
             raise PrimaGateError("Stream request produced no dispatch")
@@ -133,7 +133,9 @@ class SyncDriver:
             self.perform(next_action(settle(self._adapters, self._settings, action, opened)))
             raise PrimaGateError("Stream open failed without an error")
         key = self._settings[action.provider].api_key
-        state = StreamState(self._adapters[action.provider], key, opened.headers)
+        state = StreamState(
+            self._adapters[action.provider], key, opened.headers, action.dropped_params
+        )
         stream = SyncStream(opened, state)
         stream.prime()
         return stream
