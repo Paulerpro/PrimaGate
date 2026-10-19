@@ -436,3 +436,33 @@ def test_no_response_format_sends_no_output_config() -> None:
 
 def test_structured_output_capability() -> None:
     assert AnthropicAdapter().capabilities().structured_output is True
+
+
+def test_stream_parser_gives_a_tool_call_without_arguments_an_empty_object() -> None:
+    parser = AnthropicAdapter().new_stream_parser({})
+    chunks = []
+    for event in _events(
+        START,
+        (
+            "content_block_start",
+            {"index": 0, "content_block": {"type": "tool_use", "id": "t", "name": "f"}},
+        ),
+        (
+            "content_block_delta",
+            {"index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
+        ),
+        ("content_block_stop", {"index": 0}),
+    ):
+        chunks += parser.feed(event)
+    arguments = "".join(
+        c.choices[0].delta.tool_calls[0].function.arguments or ""  # type: ignore[union-attr,index]
+        for c in chunks
+    )
+    assert arguments == "{}"
+
+
+def test_stream_parser_rejects_a_stop_without_a_stop_reason() -> None:
+    parser = AnthropicAdapter().new_stream_parser({})
+    parser.feed(_events(START)[0])
+    with pytest.raises(errors.APIError, match="stop reason"):
+        parser.feed(_events(("message_stop", {}))[0])

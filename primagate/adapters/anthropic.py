@@ -297,9 +297,14 @@ class _StreamParser:
         self._tool_of_block: dict[int, int] = {}
         # message_start carries nothing to hand over, so the role waits for the first real chunk.
         self._role: str | None = None
+        # Tool blocks whose arguments arrived; a call with none still needs a valid "{}".
+        self._tools_with_arguments: set[int] = set()
+        self._final_sent = False
         self._done = False
 
     def feed(self, event: RawEvent) -> list[ChatCompletionChunk]:
+        if not event.data.strip():
+            return []
         try:
             data = json.loads(event.data)
             kind = data["type"]
@@ -317,7 +322,13 @@ class _StreamParser:
                 return self._block_delta(data)
             if kind == "message_delta":
                 return self._message_delta(data)
+            if kind == "content_block_stop":
+                return self._block_stop(data)
             if kind == "message_stop":
+                if not self._final_sent:
+                    raise errors.APIError(
+                        "Anthropic stream stopped without a stop reason", llm_provider=PROVIDER
+                    )
                 self._done = True
             return []
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -355,6 +366,7 @@ class _StreamParser:
         if delta["type"] == "text_delta" and delta["text"]:
             return [self._chunk(Delta(content=delta["text"]))]
         if delta["type"] == "input_json_delta" and delta["partial_json"]:
+            self._tools_with_arguments.add(self._tool_of_block[data["index"]])
             call = ToolCallDelta(
                 index=self._tool_of_block[data["index"]],
                 function=FunctionDelta(arguments=delta["partial_json"]),
@@ -362,11 +374,19 @@ class _StreamParser:
             return [self._chunk(Delta(tool_calls=[call]))]
         return []
 
+    def _block_stop(self, data: dict[str, Any]) -> list[ChatCompletionChunk]:
+        tool = self._tool_of_block.get(data["index"])
+        if tool is None or tool in self._tools_with_arguments:
+            return []
+        call = ToolCallDelta(index=tool, function=FunctionDelta(arguments="{}"))
+        return [self._chunk(Delta(tool_calls=[call]))]
+
     def _message_delta(self, data: dict[str, Any]) -> list[ChatCompletionChunk]:
         reason = data["delta"].get("stop_reason")
         usage = data["usage"]
         prompt = usage.get("input_tokens", self._input_tokens)
         completion = usage["output_tokens"]
+        self._final_sent = True
         return [
             self._chunk(
                 Delta(),

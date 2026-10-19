@@ -56,7 +56,9 @@ class SyncStream:
         return self
 
     def __next__(self) -> ChatCompletionChunk:
-        item = self._read() if self._ahead is _NOTHING else self._ahead
+        item = END if self._closed else self._ahead
+        if item is _NOTHING:
+            item = self._read()
         self._ahead = _NOTHING
         if item is END:
             raise StopIteration

@@ -296,3 +296,73 @@ def test_reading_after_close_ends_quietly(provider: str) -> None:
     next(stream)
     stream.close()
     assert list(stream) == []
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_module_level_functions_stream(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import primagate
+    import primagate.client as client_module
+
+    gate, _ = _gate(_ok("text"))
+    monkeypatch.setattr(client_module, "_default", gate)
+    if mode == "sync":
+        chunks = list(primagate.completion(model="gpt-4o", messages=MSGS, stream=True))
+    else:
+
+        async def go() -> list[Any]:
+            stream = await primagate.acompletion(model="gpt-4o", messages=MSGS, stream=True)
+            return [c async for c in stream]
+
+        chunks = asyncio.run(go())
+    assert _joined(chunks, "content") == "Hello"
+
+
+def test_close_before_the_first_read_ends_the_stream() -> None:
+    gate, _ = _gate(_ok("text"))
+    stream = gate.completion(stream=True, model="gpt-4o", messages=MSGS)
+    stream.close()
+    assert list(stream) == []
+
+
+@pytest.mark.parametrize("provider", MODELS)
+def test_timeout_after_the_first_chunk_is_a_timeout(
+    stream_call: StreamCaller, provider: str
+) -> None:
+    class Slow(Dropping):
+        def __iter__(self) -> Iterator[bytes]:
+            yield self._body
+            raise httpx2.ReadTimeout("slow")
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield self._body
+            raise httpx2.ReadTimeout("slow")
+
+    gate, _ = _gate(lambda p: httpx2.Response(200, stream=Slow(CUT[p]), headers=HEADERS))
+    run = stream_call(gate, model=MODELS[provider], messages=MSGS)
+    assert isinstance(run.read_error, errors.Timeout)
+
+
+def test_keep_alive_events_are_ignored(stream_call: StreamCaller) -> None:
+    for provider, body in (("openai", OPENAI_TEXT), ("anthropic", ANTHROPIC_TEXT)):
+        padded = b"data: \n\n" + body
+        gate, _ = _gate(
+            lambda p, padded=padded: httpx2.Response(200, content=padded, headers=HEADERS)
+        )
+        run = stream_call(gate, model=MODELS[provider], messages=MSGS)
+        assert run.call_error is None and _joined(run.chunks, "content") == "Hello"
+
+
+def test_openai_in_band_rate_limit_keeps_its_class(stream_call: StreamCaller) -> None:
+    content = sse((None, {"error": {"message": "slow", "code": "rate_limit_exceeded"}}))
+    gate, _ = _gate(lambda p: httpx2.Response(200, content=content, headers=HEADERS))
+    run = stream_call(gate, model="gpt-4o", messages=MSGS)
+    assert isinstance(run.call_error, errors.RateLimitError)
+
+
+def test_openai_rejects_streaming_with_several_choices(stream_call: StreamCaller) -> None:
+    gate, sent = _gate(_ok("text"))
+    run = stream_call(gate, model="gpt-4o", messages=MSGS, n=2)
+    assert isinstance(run.call_error, errors.UnsupportedParamsError)
+    assert sent == []

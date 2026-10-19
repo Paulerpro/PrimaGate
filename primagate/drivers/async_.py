@@ -56,7 +56,9 @@ class AsyncStream:
         return self
 
     async def __anext__(self) -> ChatCompletionChunk:
-        item = await self._read() if self._ahead is _NOTHING else self._ahead
+        item = END if self._closed else self._ahead
+        if item is _NOTHING:
+            item = await self._read()
         self._ahead = _NOTHING
         if item is END:
             raise StopAsyncIteration

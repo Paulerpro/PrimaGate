@@ -42,6 +42,11 @@ class OpenAIAdapter:
     def build_request(
         self, request: ChatCompletionRequest, *, api_key: str, base_url: str
     ) -> ProviderRequest:
+        if request.stream and request.n not in (None, 1):
+            # Per-choice finish and usage chunks interleave, so one final chunk cannot carry both.
+            raise errors.UnsupportedParamsError(
+                "Streaming does not support n greater than 1", llm_provider=PROVIDER
+            )
         body = request.to_dict()
         if request.stream:
             # Without this OpenAI sends no usage on a stream.
@@ -124,6 +129,23 @@ def _usage(raw: dict[str, Any]) -> Usage:
     )
 
 
+# In-band stream errors carry no HTTP status, so one is inferred from the error's type or code.
+_IN_BAND_STATUS = {
+    "rate_limit_exceeded": 429,
+    "insufficient_quota": 429,
+    "context_length_exceeded": 400,
+    "server_error": 500,
+}
+
+
+def _in_band_status(error: Any) -> int | None:
+    if not isinstance(error, dict):
+        return None
+    return _IN_BAND_STATUS.get(str(error.get("code"))) or _IN_BAND_STATUS.get(
+        str(error.get("type"))
+    )
+
+
 class _StreamParser:
     def __init__(self, adapter: OpenAIAdapter) -> None:
         self._adapter = adapter
@@ -134,6 +156,8 @@ class _StreamParser:
 
     def feed(self, event: RawEvent) -> list[ChatCompletionChunk]:
         data = event.data.strip()
+        if not data:
+            return []
         if data == "[DONE]":
             self._done = True
             return self._release()
@@ -141,7 +165,7 @@ class _StreamParser:
             raw = json.loads(data)
             if "error" in raw:
                 raise self._adapter.map_error(
-                    RawOutcome(status=None, headers={}, body=data.encode())
+                    RawOutcome(status=_in_band_status(raw["error"]), headers={}, body=data.encode())
                 )
             return self._chunk(raw)
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
