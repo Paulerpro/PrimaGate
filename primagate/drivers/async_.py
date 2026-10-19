@@ -95,6 +95,7 @@ class AsyncDriver:
         self._adapters = adapters
         self._settings = settings
         self._transport = transport
+        self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
     def with_builtin_adapters(
@@ -115,7 +116,7 @@ class AsyncDriver:
         await self._transport.aclose()
 
     async def run(self, request: ChatCompletionRequest) -> ChatCompletion:
-        action = first_action(request)
+        action = first_action(request, self._capabilities)
         while True:
             step = await self.perform(action)
             if isinstance(step, Finished):
@@ -123,7 +124,7 @@ class AsyncDriver:
             action = next_action(step)
 
     async def stream(self, request: ChatCompletionRequest) -> AsyncStream:
-        action = first_action(request)
+        action = first_action(request, self._capabilities)
         if not isinstance(action, steps.Dispatch):
             await self.perform(action)
             raise PrimaGateError("Stream request produced no dispatch")

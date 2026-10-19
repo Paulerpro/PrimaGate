@@ -466,3 +466,7 @@ def test_stream_parser_rejects_a_stop_without_a_stop_reason() -> None:
     parser.feed(_events(START)[0])
     with pytest.raises(errors.APIError, match="stop reason"):
         parser.feed(_events(("message_stop", {}))[0])
+
+
+def test_images_capability_is_off() -> None:
+    assert AnthropicAdapter().capabilities().images is False

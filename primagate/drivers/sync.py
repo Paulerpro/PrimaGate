@@ -94,6 +94,7 @@ class SyncDriver:
         self._adapters = adapters
         self._settings = settings
         self._transport = transport
+        self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
     def with_builtin_adapters(
@@ -114,7 +115,7 @@ class SyncDriver:
         self._transport.close()
 
     def run(self, request: ChatCompletionRequest) -> ChatCompletion:
-        action = first_action(request)
+        action = first_action(request, self._capabilities)
         while True:
             step = self.perform(action)
             if isinstance(step, Finished):
@@ -122,7 +123,7 @@ class SyncDriver:
             action = next_action(step)
 
     def stream(self, request: ChatCompletionRequest) -> SyncStream:
-        action = first_action(request)
+        action = first_action(request, self._capabilities)
         if not isinstance(action, steps.Dispatch):
             self.perform(action)
             raise PrimaGateError("Stream request produced no dispatch")

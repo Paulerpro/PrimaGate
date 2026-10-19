@@ -258,3 +258,7 @@ def test_adapter_declares_tool_support() -> None:
 
 def test_structured_output_capability() -> None:
     assert OpenAIAdapter().capabilities().structured_output is True
+
+
+def test_images_capability() -> None:
+    assert OpenAIAdapter().capabilities().images is True

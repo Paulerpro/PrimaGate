@@ -4,8 +4,20 @@ import pytest
 
 from primagate.core import steps
 from primagate.core.call import first_action, next_action, resolve_model
-from primagate.schema.errors import BadRequestError, RateLimitError
-from primagate.schema.types import ChatCompletion, ChatCompletionRequest, Choice, Message
+from primagate.schema.errors import BadRequestError, RateLimitError, UnsupportedParamsError
+from primagate.schema.types import (
+    ChatCompletion,
+    ChatCompletionRequest,
+    Choice,
+    FunctionCall,
+    Message,
+    ToolCall,
+)
+from primagate.schema.wire import Capabilities
+
+FULL = Capabilities(tools=True, structured_output=True, images=True)
+BARE = Capabilities()
+ALL = {"openai": FULL, "anthropic": FULL}
 
 
 def _request(model: str = "gpt-4o") -> ChatCompletionRequest:
@@ -51,14 +63,14 @@ def test_resolve_model_rejects_unknown_provider_prefix() -> None:
 
 
 def test_first_action_is_dispatch_with_stripped_model() -> None:
-    action = first_action(_request("openai/gpt-4o"))
+    action = first_action(_request("openai/gpt-4o"), ALL)
     assert isinstance(action, steps.Dispatch)
     assert action.provider == "openai"
     assert action.request.model == "gpt-4o"
 
 
 def test_unknown_provider_becomes_raise_action() -> None:
-    action = first_action(_request("nope/x"))
+    action = first_action(_request("nope/x"), ALL)
     assert isinstance(action, steps.Raise)
     assert isinstance(action.error, BadRequestError)
 
@@ -80,3 +92,78 @@ def test_actions_are_immutable() -> None:
     action = steps.Return(_response())
     with pytest.raises(dataclasses.FrozenInstanceError):
         action.response = _response()  # type: ignore[misc]
+
+
+TOOL = {"type": "function", "function": {"name": "f"}}
+IMAGE_MESSAGE = Message(
+    role="user",
+    content=[{"type": "text", "text": "what?"}, {"type": "image_url", "image_url": {"url": "u"}}],  # type: ignore[arg-type]
+)
+
+
+def _with(**changes: object) -> ChatCompletionRequest:
+    return dataclasses.replace(_request(), **changes)  # type: ignore[arg-type]
+
+
+def _raised(request: ChatCompletionRequest, capabilities: Capabilities) -> UnsupportedParamsError:
+    action = first_action(request, {"openai": capabilities})
+    assert isinstance(action, steps.Raise)
+    assert isinstance(action.error, UnsupportedParamsError)
+    assert action.error.llm_provider == "openai"
+    return action.error
+
+
+def test_unsupported_tools_raise_naming_the_feature_and_fix() -> None:
+    error = _raised(_with(tools=[TOOL]), BARE)
+    assert "tools" in error.message and 'drop_params=["tools"]' in error.message
+
+
+def test_tool_history_alone_needs_tools() -> None:
+    call = ToolCall(id="c", function=FunctionCall(name="f", arguments="{}"))
+    history = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", tool_calls=[call]),
+        Message(role="tool", tool_call_id="c", content="x"),
+    ]
+    assert "tools" in _raised(_with(messages=history), BARE).message
+    only_result = [Message(role="tool", tool_call_id="c", content="x")]
+    assert "tools" in _raised(_with(messages=only_result), BARE).message
+
+
+def test_unsupported_structured_output_names_response_format() -> None:
+    error = _raised(_with(response_format={"type": "json_object"}), BARE)
+    assert 'drop_params=["response_format"]' in error.message
+
+
+def test_unsupported_images_name_image() -> None:
+    error = _raised(_with(messages=[IMAGE_MESSAGE]), BARE)
+    assert 'drop_params=["image"]' in error.message
+
+
+def test_every_missing_feature_is_named_in_one_error() -> None:
+    error = _raised(_with(tools=[TOOL], messages=[IMAGE_MESSAGE]), BARE)
+    assert "tools" in error.message and "image" in error.message
+
+
+def test_text_only_list_content_is_not_an_image() -> None:
+    text = Message(role="user", content=[{"type": "text", "text": "hi"}])  # type: ignore[arg-type]
+    assert isinstance(first_action(_with(messages=[text]), {"openai": BARE}), steps.Dispatch)
+
+
+def test_supported_features_dispatch_unchanged() -> None:
+    request = _with(tools=[TOOL], response_format={"type": "json_object"}, messages=[IMAGE_MESSAGE])
+    action = first_action(request, {"openai": FULL})
+    assert isinstance(action, steps.Dispatch) and action.request.tools == [TOOL]
+
+
+def test_check_uses_the_target_providers_capabilities() -> None:
+    request = _with(model="claude-sonnet-5-5", tools=[TOOL])
+    capabilities = {"openai": FULL, "anthropic": BARE}
+    action = first_action(request, capabilities)
+    assert isinstance(action, steps.Raise)
+    assert action.error.llm_provider == "anthropic"
+
+
+def test_provider_without_an_adapter_raises_a_gate_error() -> None:
+    action = first_action(_request(), {})
+    assert isinstance(action, steps.Raise) and "openai" in action.error.message
