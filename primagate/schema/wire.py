@@ -30,6 +30,22 @@ class RawOutcome:
 
 
 @dataclass(frozen=True)
+class RawEvent:
+    """One server-sent event, undecoded beyond its framing."""
+
+    event: str
+    data: str
+
+
+class StreamFailure(Exception):
+    """Transport lost a stream after it opened; `kind` is a failure kind, never a mapped error."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+@dataclass(frozen=True)
 class Capabilities:
     """Features the adapter implements today, not what the provider could do."""
 

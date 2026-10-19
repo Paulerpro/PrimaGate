@@ -8,7 +8,7 @@ import primagate.adapters.openai as openai_adapter
 from primagate.adapters.openai import OpenAIAdapter
 from primagate.schema import errors
 from primagate.schema.types import ChatCompletionRequest, FunctionCall, Message, ToolCall
-from primagate.schema.wire import RawOutcome
+from primagate.schema.wire import RawEvent, RawOutcome
 
 
 def _outcome(status: int, body: object, *, headers: dict[str, str] | None = None) -> RawOutcome:
@@ -104,11 +104,69 @@ def test_map_error_uses_provider_message() -> None:
     assert OpenAIAdapter().map_error(_err(429, msg="slow down")).message == "slow down"
 
 
-def test_capabilities_and_stream_stub() -> None:
+def test_streaming_capability_and_usage_request() -> None:
     adapter = OpenAIAdapter()
-    assert adapter.capabilities().streaming is False
-    with pytest.raises(NotImplementedError):
-        adapter.new_stream_parser()
+    assert adapter.capabilities().streaming is True
+    request = ChatCompletionRequest(
+        model="gpt-4o", messages=[Message(role="user", content="hi")], stream=True
+    )
+    body = adapter.build_request(request, api_key="k", base_url="https://x.test/v1").json_body
+    assert body["stream"] is True
+    assert body["stream_options"] == {"include_usage": True}
+
+
+def _data(payload: object) -> RawEvent:
+    text = payload if isinstance(payload, str) else json.dumps(payload)
+    return RawEvent("message", text)
+
+
+def _delta(delta: dict[str, object], finish: str | None = None, **extra: object) -> RawEvent:
+    choice = {"index": 0, "delta": delta, "finish_reason": finish}
+    return _data({"id": "c", "created": 1, "model": "m", "choices": [choice], **extra})
+
+
+USAGE = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+
+
+def test_stream_parser_puts_usage_on_the_finish_chunk() -> None:
+    parser = OpenAIAdapter().new_stream_parser({})
+    out = []
+    for event in (
+        _delta({"role": "assistant", "content": ""}),
+        _delta({"content": "hi"}),
+        _delta({}, "stop"),
+        _data({"id": "c", "created": 1, "model": "m", "choices": [], "usage": USAGE}),
+        _data("[DONE]"),
+    ):
+        out += parser.feed(event)
+    assert parser.finish() == []
+    assert [c.choices[0].delta.content for c in out] == ["hi", None]
+    assert out[0].choices[0].delta.role == "assistant"
+    assert out[1].choices[0].finish_reason == "stop"
+    assert out[1].usage is not None and out[1].usage.total_tokens == 3
+
+
+def test_stream_parser_keeps_finish_chunk_that_already_has_usage() -> None:
+    parser = OpenAIAdapter().new_stream_parser({})
+    out = parser.feed(_delta({"content": "x"}, "stop", usage=USAGE)) + parser.feed(_data("[DONE]"))
+    assert len(out) == 1 and out[0].usage is not None
+
+
+def test_stream_parser_releases_finish_chunk_without_usage_at_done() -> None:
+    parser = OpenAIAdapter().new_stream_parser({})
+    assert parser.feed(_delta({}, "length")) == []
+    out = parser.feed(_data("[DONE]"))
+    assert out[0].choices[0].finish_reason == "length" and out[0].usage is None
+
+
+def test_stream_parser_maps_in_band_error_and_early_end() -> None:
+    parser = OpenAIAdapter().new_stream_parser({})
+    with pytest.raises(errors.APIError, match="boom"):
+        parser.feed(_data({"error": {"message": "boom"}}))
+    with pytest.raises(errors.APIError, match="DONE"):
+        OpenAIAdapter().new_stream_parser({}).finish()
+    with pytest.raises(errors.APIError, match="Unparseable"):
+        parser.feed(_data("not json"))
 
 
 def test_adapter_module_performs_no_io() -> None:

@@ -611,3 +611,10 @@ def test_pydantic_is_never_imported() -> None:
 
     code = "import primagate, sys; sys.exit('pydantic' in sys.modules)"
     assert subprocess.run([sys.executable, "-I", "-c", code]).returncode == 0
+
+
+def test_stream_false_is_a_plain_call(call: Caller) -> None:
+    gate, calls = _gate()
+    result = call(gate, model="gpt-4o", messages=MSGS, stream=False)
+    assert result.choices[0].message.content == "hello"
+    assert "stream" not in json.loads(calls[0].content)

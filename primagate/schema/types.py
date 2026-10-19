@@ -101,9 +101,25 @@ class ChatCompletion(_Serializable):
 
 
 @dataclass
+class FunctionDelta(_Serializable):
+    name: str | None = None
+    arguments: str | None = None
+
+
+@dataclass
+class ToolCallDelta(_Serializable):
+    # Position among the response's tool calls; later deltas for one call share it.
+    index: int
+    id: str | None = None
+    type: str | None = None
+    function: FunctionDelta | None = None
+
+
+@dataclass
 class Delta(_Serializable):
     role: str | None = None
     content: str | None = None
+    tool_calls: list[ToolCallDelta] | None = None
 
 
 @dataclass

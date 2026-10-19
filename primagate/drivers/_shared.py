@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 from primagate.core import steps
 from primagate.core.ports import Adapter
 from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
-from primagate.schema.types import ChatCompletion
-from primagate.schema.wire import ProviderRequest, RawOutcome
+from primagate.schema.types import ChatCompletion, ChatCompletionChunk
+from primagate.schema.wire import ProviderRequest, RawEvent, RawOutcome
 
 
 @dataclass(frozen=True)
@@ -44,3 +46,46 @@ def settle(
     except PrimaGateError as err:
         error = err
     return steps.DispatchOutcome(error=error.redact([settings[action.provider].api_key]))
+
+
+END: Final = object()
+
+
+class StreamState:
+    """Sans-IO bookkeeping for one stream: queued chunks, then at most one error, then the end."""
+
+    def __init__(self, adapter: Adapter, api_key: str, headers: Mapping[str, str]) -> None:
+        self._adapter = adapter
+        self._api_key = api_key
+        self._parser = adapter.new_stream_parser(headers)
+        self._queue: deque[ChatCompletionChunk] = deque()
+        self._error: PrimaGateError | None = None
+        self._finished = False
+
+    def feed(self, event: RawEvent) -> None:
+        self._produce(lambda: self._parser.feed(event))
+
+    def end(self) -> None:
+        self._produce(self._parser.finish)
+        self._finished = True
+
+    def fail(self, kind: str) -> None:
+        raw = RawOutcome(status=None, headers={}, body=b"", failure=kind)
+        self._error = self._adapter.map_error(raw).redact([self._api_key])
+        self._finished = True
+
+    def _produce(self, make: Callable[[], list[ChatCompletionChunk]]) -> None:
+        try:
+            self._queue.extend(make())
+        except PrimaGateError as err:
+            self._error = err.redact([self._api_key])
+            self._finished = True
+
+    def next_item(self) -> ChatCompletionChunk | object | None:
+        """A chunk, `END` once the stream is over, or None when more input is needed."""
+        if self._queue:
+            return self._queue.popleft()
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
+        return END if self._finished else None

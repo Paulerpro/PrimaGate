@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Mapping, Sequence
-from typing import Any, Required, TypedDict, cast
+from typing import Any, Literal, Required, TypedDict, cast, overload
 
 import httpx2
 from typing_extensions import Unpack
 
-from primagate.drivers.async_ import AsyncDriver
+from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.providers import check_provider_names
-from primagate.drivers.sync import SyncDriver
+from primagate.drivers.sync import SyncDriver, SyncStream
 from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.types import (
     ChatCompletion,
@@ -39,6 +39,18 @@ class CallParams(TypedDict, total=False):
     response_format: Mapping[str, Any] | type | None
 
 
+class PlainCallParams(CallParams, total=False):
+    stream: Literal[False] | None
+
+
+class StreamCallParams(CallParams):
+    stream: Required[Literal[True]]
+
+
+class AnyCallParams(CallParams, total=False):
+    stream: bool | None
+
+
 class PrimaGate:
     """Owns configuration and clients. Everything stateful lives on the instance."""
 
@@ -65,13 +77,41 @@ class PrimaGate:
     def __repr__(self) -> str:
         return f"PrimaGate(closed={self._closed})"
 
-    def completion(self, **params: Unpack[CallParams]) -> ChatCompletion:
-        driver = self._get_driver()
-        return driver.run(_request(params))
+    @overload
+    def completion(self, **params: Unpack[StreamCallParams]) -> SyncStream: ...
 
-    async def acompletion(self, **params: Unpack[CallParams]) -> ChatCompletion:
+    @overload
+    def completion(self, **params: Unpack[PlainCallParams]) -> ChatCompletion: ...
+
+    @overload
+    def completion(self, **params: Unpack[AnyCallParams]) -> ChatCompletion | SyncStream: ...
+
+    def completion(self, **params: Unpack[AnyCallParams]) -> ChatCompletion | SyncStream:
+        return self._completion(params)
+
+    def _completion(self, params: AnyCallParams) -> ChatCompletion | SyncStream:
+        driver = self._get_driver()
+        request = _request(params)
+        return driver.stream(request) if request.stream else driver.run(request)
+
+    @overload
+    async def acompletion(self, **params: Unpack[StreamCallParams]) -> AsyncStream: ...
+
+    @overload
+    async def acompletion(self, **params: Unpack[PlainCallParams]) -> ChatCompletion: ...
+
+    @overload
+    async def acompletion(
+        self, **params: Unpack[AnyCallParams]
+    ) -> ChatCompletion | AsyncStream: ...
+
+    async def acompletion(self, **params: Unpack[AnyCallParams]) -> ChatCompletion | AsyncStream:
+        return await self._acompletion(params)
+
+    async def _acompletion(self, params: AnyCallParams) -> ChatCompletion | AsyncStream:
         driver = self._get_async_driver()
-        return await driver.run(_request(params))
+        request = _request(params)
+        return await driver.stream(request) if request.stream else await driver.run(request)
 
     def close(self) -> None:
         """Close the sync client. Async clients are released by `aclose()`."""
@@ -120,10 +160,10 @@ class PrimaGate:
 
 # Spelled out because postponed annotations hide Required[] from TypedDict introspection.
 _REQUIRED_PARAMS = frozenset({"model", "messages"})
-_PARAM_NAMES = frozenset(CallParams.__annotations__)
+_PARAM_NAMES = frozenset(AnyCallParams.__annotations__)
 
 
-def _request(params: CallParams) -> ChatCompletionRequest:
+def _request(params: AnyCallParams) -> ChatCompletionRequest:
     # **params no longer lets Python reject a misspelled or missing keyword, so do it here.
     unknown = sorted(params.keys() - _PARAM_NAMES)
     if unknown:
@@ -142,6 +182,7 @@ def _request(params: CallParams) -> ChatCompletionRequest:
         stop=params.get("stop"),
         n=params.get("n"),
         seed=params.get("seed"),
+        stream=params.get("stream") or None,
         tools=_tools(params.get("tools")),
         response_format=_response_format(params.get("response_format")),
     )
@@ -254,9 +295,33 @@ def get_default() -> PrimaGate:
         return _default
 
 
-def completion(**params: Unpack[CallParams]) -> ChatCompletion:
-    return get_default().completion(**params)
+@overload
+def completion(**params: Unpack[StreamCallParams]) -> SyncStream: ...
 
 
-async def acompletion(**params: Unpack[CallParams]) -> ChatCompletion:
-    return await get_default().acompletion(**params)
+@overload
+def completion(**params: Unpack[PlainCallParams]) -> ChatCompletion: ...
+
+
+@overload
+def completion(**params: Unpack[AnyCallParams]) -> ChatCompletion | SyncStream: ...
+
+
+def completion(**params: Unpack[AnyCallParams]) -> ChatCompletion | SyncStream:
+    return get_default()._completion(params)
+
+
+@overload
+async def acompletion(**params: Unpack[StreamCallParams]) -> AsyncStream: ...
+
+
+@overload
+async def acompletion(**params: Unpack[PlainCallParams]) -> ChatCompletion: ...
+
+
+@overload
+async def acompletion(**params: Unpack[AnyCallParams]) -> ChatCompletion | AsyncStream: ...
+
+
+async def acompletion(**params: Unpack[AnyCallParams]) -> ChatCompletion | AsyncStream:
+    return await get_default()._acompletion(params)

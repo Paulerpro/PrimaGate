@@ -112,3 +112,61 @@ async def test_async_transport_drops_clients_of_finished_loops() -> None:
     await transport.send(REQ)
     assert len(transport._clients) == 1
     assert asyncio.get_running_loop() in transport._clients
+
+
+SSE_HEADERS = {"content-type": "text/event-stream"}
+
+
+def _open(transport: httpx2.MockTransport, mode: str):  # type: ignore[no-untyped-def]
+    """Open a stream in either mode; returns (outcome_or_events, close)."""
+    if mode == "sync":
+        sync = SyncTransport(timeout=5.0, transport=transport)
+        opened = sync.open_stream(REQ)
+        if isinstance(opened, RawOutcome):
+            return opened, []
+        return opened, list(opened.events())
+
+    async def go():  # type: ignore[no-untyped-def]
+        asynchronous = AsyncTransport(timeout=5.0, transport=transport)
+        opened = await asynchronous.open_stream(REQ)
+        if isinstance(opened, RawOutcome):
+            return opened, []
+        return opened, [e async for e in opened.events()]
+
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_open_stream_returns_events_and_headers(mode: str) -> None:
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200, headers=SSE_HEADERS, content=b"event: a\ndata: 1\n\ndata: [DONE]\n\n"
+        )
+
+    opened, events = _open(httpx2.MockTransport(handle), mode)
+    assert [(e.event, e.data) for e in events] == [("a", "1"), ("message", "[DONE]")]
+    assert opened.headers["content-type"] == "text/event-stream"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_open_stream_returns_error_status_whole(mode: str) -> None:
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(429, headers={"retry-after": "3"}, content=b"slow")
+
+    opened, events = _open(httpx2.MockTransport(handle), mode)
+    assert isinstance(opened, RawOutcome)
+    assert (opened.status, opened.body, opened.headers["retry-after"]) == (429, b"slow", "3")
+    assert events == []
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("exc", "kind"),
+    [(httpx2.ReadTimeout("t"), "timeout"), (httpx2.ConnectError("c"), "connection")],
+)
+def test_open_stream_reports_failures(mode: str, exc: Exception, kind: str) -> None:
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        raise exc
+
+    opened, _ = _open(httpx2.MockTransport(handle), mode)
+    assert isinstance(opened, RawOutcome) and opened.failure == kind

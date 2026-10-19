@@ -1,18 +1,82 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, ClassVar
+from types import TracebackType
+from typing import Any, ClassVar, Self
 
 import httpx2
 
 from primagate.core import steps
 from primagate.core.call import first_action, next_action
 from primagate.core.ports import Adapter
-from primagate.drivers._shared import Finished, Step, prepare, settle
+from primagate.drivers._shared import END, Finished, Step, StreamState, prepare, settle
 from primagate.drivers.providers import SettingsResolver, SettingsSource, builtin_adapters
 from primagate.schema.errors import PrimaGateError
-from primagate.schema.types import ChatCompletion, ChatCompletionRequest
-from primagate.transport.sync import SyncTransport
+from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
+from primagate.schema.wire import RawOutcome, StreamFailure
+from primagate.transport.sync import SyncEventStream, SyncTransport
+
+_NOTHING = object()
+
+
+class SyncStream:
+    """Chunks of one streamed response. The driver opens it and reads up to the first chunk."""
+
+    def __init__(self, source: SyncEventStream, state: StreamState) -> None:
+        self._source = source
+        self._events = source.events()
+        self._state = state
+        self._ahead: object = _NOTHING
+        self._closed = False
+
+    def _read(self) -> object:
+        if self._closed:
+            return END
+        try:
+            while True:
+                item = self._state.next_item()
+                if item is END:
+                    self.close()
+                if item is not None:
+                    return item
+                try:
+                    self._state.feed(next(self._events))
+                except StopIteration:
+                    self._state.end()
+                except StreamFailure as failure:
+                    self._state.fail(failure.kind)
+        except BaseException:
+            self.close()
+            raise
+
+    def prime(self) -> None:
+        self._ahead = self._read()
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> ChatCompletionChunk:
+        item = self._read() if self._ahead is _NOTHING else self._ahead
+        self._ahead = _NOTHING
+        if item is END:
+            raise StopIteration
+        assert isinstance(item, ChatCompletionChunk)
+        return item
+
+    def close(self) -> None:
+        self._closed = True
+        self._source.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
 
 class SyncDriver:
@@ -54,6 +118,22 @@ class SyncDriver:
             if isinstance(step, Finished):
                 return step.response
             action = next_action(step)
+
+    def stream(self, request: ChatCompletionRequest) -> SyncStream:
+        action = first_action(request)
+        if not isinstance(action, steps.Dispatch):
+            self.perform(action)
+            raise PrimaGateError("Stream request produced no dispatch")
+        provider_request = prepare(self._adapters, self._settings, action)
+        opened = self._transport.open_stream(provider_request)
+        if isinstance(opened, RawOutcome):
+            self.perform(next_action(settle(self._adapters, self._settings, action, opened)))
+            raise PrimaGateError("Stream open failed without an error")
+        key = self._settings[action.provider].api_key
+        state = StreamState(self._adapters[action.provider], key, opened.headers)
+        stream = SyncStream(opened, state)
+        stream.prime()
+        return stream
 
     def perform(self, action: steps.Action) -> Step:
         handler = self.HANDLERS.get(type(action))

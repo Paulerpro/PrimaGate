@@ -3,10 +3,31 @@ from __future__ import annotations
 import asyncio
 import threading
 import weakref
+from collections.abc import AsyncGenerator
 
 import httpx2
 
-from primagate.schema.wire import ProviderRequest, RawOutcome
+from primagate.schema.wire import ProviderRequest, RawEvent, RawOutcome, StreamFailure
+
+
+class AsyncEventStream:
+    """An opened event stream. Failures after opening are reported as `StreamFailure` kinds."""
+
+    def __init__(self, response: httpx2.Response) -> None:
+        self._response = response
+        self.headers = dict(response.headers)
+
+    async def events(self) -> AsyncGenerator[RawEvent]:
+        try:
+            async for event in httpx2.EventSource(self._response):
+                yield RawEvent(event.event, event.data)
+        except httpx2.TimeoutException:
+            raise StreamFailure("timeout") from None
+        except httpx2.HTTPError:
+            raise StreamFailure("connection") from None
+
+    async def aclose(self) -> None:
+        await self._response.aclose()
 
 
 class AsyncTransport:
@@ -47,6 +68,30 @@ class AsyncTransport:
         except httpx2.HTTPError:
             return RawOutcome(status=None, headers={}, body=b"", failure="connection")
         return RawOutcome(status=resp.status_code, headers=dict(resp.headers), body=resp.content)
+
+    async def open_stream(self, request: ProviderRequest) -> RawOutcome | AsyncEventStream:
+        """Open a streaming response; a non-success status comes back whole as an outcome."""
+        client = self._client()
+        try:
+            built = client.build_request(
+                request.method, request.url, headers=request.headers, json=request.json_body
+            )
+            resp = await client.send(built, stream=True)
+        except httpx2.TimeoutException:
+            return RawOutcome(status=None, headers={}, body=b"", failure="timeout")
+        except httpx2.HTTPError:
+            return RawOutcome(status=None, headers={}, body=b"", failure="connection")
+        if 200 <= resp.status_code < 300:
+            return AsyncEventStream(resp)
+        try:
+            body = await resp.aread()
+        except httpx2.TimeoutException:
+            return RawOutcome(status=None, headers={}, body=b"", failure="timeout")
+        except httpx2.HTTPError:
+            return RawOutcome(status=None, headers={}, body=b"", failure="connection")
+        finally:
+            await resp.aclose()
+        return RawOutcome(status=resp.status_code, headers=dict(resp.headers), body=body)
 
     async def aclose(self) -> None:
         loop = asyncio.get_running_loop()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -9,14 +10,19 @@ from primagate.adapters._common import error_details
 from primagate.schema import errors
 from primagate.schema.types import (
     ChatCompletion,
+    ChatCompletionChunk,
     ChatCompletionRequest,
     Choice,
+    ChunkChoice,
+    Delta,
     FunctionCall,
+    FunctionDelta,
     Message,
     ToolCall,
+    ToolCallDelta,
     Usage,
 )
-from primagate.schema.wire import Capabilities, ProviderRequest, RawOutcome
+from primagate.schema.wire import Capabilities, ProviderRequest, RawEvent, RawOutcome
 
 PROVIDER = "anthropic"
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
@@ -41,6 +47,17 @@ _BY_STATUS: dict[int, type[errors.PrimaGateError]] = {
     413: errors.BadRequestError,
     429: errors.RateLimitError,
 }
+# Statuses that stand in for in-band stream errors, which arrive without an HTTP status.
+_ERROR_TYPE_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "request_too_large": 413,
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "overloaded_error": 529,
+}
 _CONTEXT_PHRASES = ("prompt is too long", "context window")
 
 
@@ -63,6 +80,8 @@ class AnthropicAdapter:
             "max_tokens": DEFAULT_MAX_TOKENS if request.max_tokens is None else request.max_tokens,
             "messages": messages,
         }
+        if request.stream:
+            body["stream"] = True
         if system:
             body["system"] = system
         if request.tools:
@@ -131,8 +150,8 @@ class AnthropicAdapter:
                 status_code=outcome.status,
             ) from exc
 
-    def new_stream_parser(self) -> Any:
-        raise NotImplementedError("Streaming is not supported yet")
+    def new_stream_parser(self, headers: Mapping[str, str]) -> _StreamParser:
+        return _StreamParser(self, _created(dict(headers)))
 
     def map_error(self, outcome: RawOutcome) -> errors.PrimaGateError:
         if outcome.failure == "timeout":
@@ -153,7 +172,7 @@ class AnthropicAdapter:
         return cls(message, llm_provider=PROVIDER, status_code=status)
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(tools=True, structured_output=True)
+        return Capabilities(tools=True, structured_output=True, streaming=True)
 
 
 def _output_format(response_format: dict[str, Any]) -> dict[str, Any]:
@@ -264,3 +283,110 @@ def _created(headers: dict[str, str]) -> int:
             except (TypeError, ValueError, OverflowError, OSError):
                 return 0
     return 0
+
+
+class _StreamParser:
+    def __init__(self, adapter: AnthropicAdapter, created: int) -> None:
+        self._adapter = adapter
+        self._created = created
+        self._id = ""
+        self._model = ""
+        self._input_tokens = 0
+        # Anthropic numbers every content block; callers see tool calls numbered from zero.
+        self._tool_index = -1
+        self._tool_of_block: dict[int, int] = {}
+        # message_start carries nothing to hand over, so the role waits for the first real chunk.
+        self._role: str | None = None
+        self._done = False
+
+    def feed(self, event: RawEvent) -> list[ChatCompletionChunk]:
+        try:
+            data = json.loads(event.data)
+            kind = data["type"]
+            if kind == "error":
+                raise self._in_band_error(event.data, data)
+            if kind == "message_start":
+                message = data["message"]
+                self._id, self._model = message["id"], message["model"]
+                self._input_tokens = message["usage"]["input_tokens"]
+                self._role = message.get("role", "assistant")
+                return []
+            if kind == "content_block_start":
+                return self._block_start(data)
+            if kind == "content_block_delta":
+                return self._block_delta(data)
+            if kind == "message_delta":
+                return self._message_delta(data)
+            if kind == "message_stop":
+                self._done = True
+            return []
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise errors.APIError(
+                "Unparseable stream event from Anthropic", llm_provider=PROVIDER
+            ) from exc
+
+    def finish(self) -> list[ChatCompletionChunk]:
+        if not self._done:
+            raise errors.APIError(
+                "Anthropic stream ended before message_stop", llm_provider=PROVIDER
+            )
+        return []
+
+    def _in_band_error(self, raw: str, data: dict[str, Any]) -> errors.PrimaGateError:
+        status = _ERROR_TYPE_STATUS.get(data["error"].get("type"), 500)
+        return self._adapter.map_error(RawOutcome(status=status, headers={}, body=raw.encode()))
+
+    def _block_start(self, data: dict[str, Any]) -> list[ChatCompletionChunk]:
+        block = data["content_block"]
+        if block["type"] != "tool_use":
+            return []
+        self._tool_index += 1
+        self._tool_of_block[data["index"]] = self._tool_index
+        call = ToolCallDelta(
+            index=self._tool_index,
+            id=block["id"],
+            type="function",
+            function=FunctionDelta(name=block["name"], arguments=""),
+        )
+        return [self._chunk(Delta(tool_calls=[call]))]
+
+    def _block_delta(self, data: dict[str, Any]) -> list[ChatCompletionChunk]:
+        delta = data["delta"]
+        if delta["type"] == "text_delta" and delta["text"]:
+            return [self._chunk(Delta(content=delta["text"]))]
+        if delta["type"] == "input_json_delta" and delta["partial_json"]:
+            call = ToolCallDelta(
+                index=self._tool_of_block[data["index"]],
+                function=FunctionDelta(arguments=delta["partial_json"]),
+            )
+            return [self._chunk(Delta(tool_calls=[call]))]
+        return []
+
+    def _message_delta(self, data: dict[str, Any]) -> list[ChatCompletionChunk]:
+        reason = data["delta"].get("stop_reason")
+        usage = data["usage"]
+        prompt = usage.get("input_tokens", self._input_tokens)
+        completion = usage["output_tokens"]
+        return [
+            self._chunk(
+                Delta(),
+                finish_reason=_STOP_REASONS.get(reason, reason),
+                usage=Usage(
+                    prompt_tokens=prompt,
+                    completion_tokens=completion,
+                    total_tokens=prompt + completion,
+                ),
+            )
+        ]
+
+    def _chunk(
+        self, delta: Delta, *, finish_reason: str | None = None, usage: Usage | None = None
+    ) -> ChatCompletionChunk:
+        delta.role, self._role = self._role, None
+        return ChatCompletionChunk(
+            id=self._id,
+            created=self._created,
+            model=self._model,
+            choices=[ChunkChoice(index=0, delta=delta, finish_reason=finish_reason)],
+            usage=usage,
+        )

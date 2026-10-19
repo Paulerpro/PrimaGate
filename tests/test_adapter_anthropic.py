@@ -8,7 +8,7 @@ import primagate.adapters.anthropic as anthropic_adapter
 from primagate.adapters.anthropic import AnthropicAdapter
 from primagate.schema import errors
 from primagate.schema.types import ChatCompletionRequest, FunctionCall, Message, ToolCall
-from primagate.schema.wire import RawOutcome
+from primagate.schema.wire import RawEvent, RawOutcome
 
 BASE = "https://x.test/v1"
 
@@ -202,11 +202,68 @@ def test_map_error_uses_provider_message_and_bounds_non_json_bodies() -> None:
     assert len(adapter.map_error(_outcome(502, b"x" * 2000)).message) == 500
 
 
-def test_capabilities_and_stream_stub() -> None:
-    adapter = AnthropicAdapter()
-    assert adapter.capabilities().streaming is False
-    with pytest.raises(NotImplementedError):
-        adapter.new_stream_parser()
+def test_streaming_capability_and_request_flag() -> None:
+    assert AnthropicAdapter().capabilities().streaming is True
+    assert _build(Message(role="user", content="hi"), stream=True).json_body["stream"] is True
+    assert "stream" not in _build(Message(role="user", content="hi")).json_body
+
+
+def _events(*items: tuple[str, object]) -> list[RawEvent]:
+    return [RawEvent(kind, json.dumps({"type": kind, **fields})) for kind, fields in items]
+
+
+START = (
+    "message_start",
+    {"message": {"id": "m", "model": "c", "role": "assistant", "usage": {"input_tokens": 4}}},
+)
+
+
+def test_stream_parser_numbers_tool_calls_from_zero_and_skips_unused_blocks() -> None:
+    parser = AnthropicAdapter().new_stream_parser({"date": "Thu, 01 Jan 1970 00:00:01 GMT"})
+    chunks = []
+    for event in _events(
+        START,
+        ("content_block_start", {"index": 0, "content_block": {"type": "thinking"}}),
+        ("content_block_delta", {"index": 0, "delta": {"type": "thinking_delta", "thinking": "x"}}),
+        (
+            "content_block_start",
+            {"index": 3, "content_block": {"type": "tool_use", "id": "t", "name": "f"}},
+        ),
+        (
+            "content_block_delta",
+            {"index": 3, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+        ),
+        ("message_delta", {"delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}}),
+        ("message_stop", {}),
+    ):
+        chunks += parser.feed(event)
+    assert parser.finish() == []
+    calls = [c.choices[0].delta.tool_calls for c in chunks[:2]]
+    assert [c[0].index for c in calls if c] == [0, 0]
+    assert chunks[0].choices[0].delta.role == "assistant"
+    assert chunks[1].choices[0].delta.role is None
+    assert chunks[0].created == 1
+    final = chunks[-1]
+    assert final.choices[0].finish_reason == "tool_calls"
+    assert final.usage is not None and final.usage.total_tokens == 9
+
+
+def test_stream_parser_maps_in_band_errors_by_type() -> None:
+    parser = AnthropicAdapter().new_stream_parser({})
+    error = RawEvent(
+        "error",
+        json.dumps({"type": "error", "error": {"type": "rate_limit_error", "message": "slow"}}),
+    )
+    with pytest.raises(errors.RateLimitError, match="slow"):
+        parser.feed(error)
+
+
+def test_stream_parser_rejects_garbage_and_early_end() -> None:
+    parser = AnthropicAdapter().new_stream_parser({})
+    with pytest.raises(errors.APIError):
+        parser.feed(RawEvent("message", "not json"))
+    with pytest.raises(errors.APIError):
+        parser.finish()
 
 
 def test_adapter_module_performs_no_io() -> None:
