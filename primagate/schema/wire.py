@@ -70,3 +70,15 @@ class Endpoint:
     base_url: str
     # None means the provider's own key; it stays out of repr like every other key.
     api_key: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Per-endpoint retry budget and backoff; starting values, tuned by testing."""
+
+    max_retries: int = 2
+    backoff_base: float = 0.5
+    backoff_max: float = 8.0
+
+
+DEFAULT_RETRY = RetryPolicy()

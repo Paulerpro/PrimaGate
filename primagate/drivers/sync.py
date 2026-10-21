@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+import time
 from collections.abc import Callable, Mapping
 from types import TracebackType
 from typing import Any, ClassVar, Self
@@ -9,11 +11,24 @@ import httpx2
 from primagate.core import steps
 from primagate.core.call import first_action, next_action, parse_drop_params
 from primagate.core.ports import Adapter
-from primagate.drivers._shared import END, Finished, Step, StreamState, prepare, settle
-from primagate.drivers.providers import SettingsResolver, SettingsSource, builtin_adapters
+from primagate.drivers._shared import (
+    END,
+    Finished,
+    Step,
+    StreamState,
+    credentials,
+    prepare,
+    settle,
+)
+from primagate.drivers.providers import (
+    ProviderRouting,
+    SettingsResolver,
+    SettingsSource,
+    builtin_adapters,
+)
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
-from primagate.schema.wire import RawOutcome, StreamFailure
+from primagate.schema.wire import DEFAULT_RETRY, RawOutcome, RetryPolicy, StreamFailure
 from primagate.transport.sync import SyncEventStream, SyncTransport
 
 _NOTHING = object()
@@ -90,10 +105,14 @@ class SyncDriver:
         adapters: Mapping[str, Adapter],
         settings: SettingsSource,
         transport: SyncTransport,
+        routing: ProviderRouting | None = None,
+        retry: RetryPolicy = DEFAULT_RETRY,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
         self._transport = transport
+        self._routing = routing
+        self._retry = retry
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -104,41 +123,61 @@ class SyncDriver:
         base_urls: Mapping[str, str] | None = None,
         timeout: float,
         http_transport: httpx2.BaseTransport | None = None,
+        routing: ProviderRouting | None = None,
+        retry: RetryPolicy = DEFAULT_RETRY,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
             settings=SettingsResolver(api_keys=api_keys, base_urls=base_urls),
             transport=SyncTransport(timeout=timeout, transport=http_transport),
+            routing=routing,
+            retry=retry,
         )
 
     def close(self) -> None:
         self._transport.close()
 
+    def _first(self, request: ChatCompletionRequest, drop_params: object) -> steps.Action:
+        return first_action(
+            request, self._capabilities, parse_drop_params(drop_params), self._routing, self._retry
+        )
+
     def run(self, request: ChatCompletionRequest, drop_params: object = None) -> ChatCompletion:
-        action = first_action(request, self._capabilities, parse_drop_params(drop_params))
+        action = self._first(request, drop_params)
         while True:
             step = self.perform(action)
             if isinstance(step, Finished):
                 return step.response
-            assert isinstance(action, steps.Dispatch)
             action = next_action(action, step)
 
     def stream(self, request: ChatCompletionRequest, drop_params: object = None) -> SyncStream:
-        action = first_action(request, self._capabilities, parse_drop_params(drop_params))
-        if not isinstance(action, steps.Dispatch):
-            self.perform(action)
-            raise PrimaGateError("Stream request produced no dispatch")
+        action = self._first(request, drop_params)
+        while True:
+            if isinstance(action, steps.Dispatch):
+                opened = self._open(action)
+                if isinstance(opened, SyncStream):
+                    return opened
+                step: steps.Outcome = opened
+            else:
+                performed = self.perform(action)
+                if isinstance(performed, Finished):
+                    raise PrimaGateError("Stream request produced no dispatch")
+                step = performed
+            action = next_action(action, step)
+
+    def _open(self, action: steps.Dispatch) -> SyncStream | steps.DispatchOutcome:
+        """Open a stream and read to its first chunk; failing before that can be retried."""
         provider_request = prepare(self._adapters, self._settings, action)
         opened = self._transport.open_stream(provider_request)
         if isinstance(opened, RawOutcome):
-            self.perform(
-                next_action(action, settle(self._adapters, self._settings, action, opened))
-            )
-            raise PrimaGateError("Stream open failed without an error")
-        key = self._settings[action.provider].api_key
+            return settle(self._adapters, self._settings, action, opened)
+        key = credentials(self._settings, action).api_key
         state = StreamState(self._adapters[action.provider], key, opened.headers, action)
         stream = SyncStream(opened, state)
-        stream.prime()
+        try:
+            stream.prime()
+        except PrimaGateError as err:
+            return steps.DispatchOutcome(error=err)
         return stream
 
     def perform(self, action: steps.Action) -> Step:
@@ -152,6 +191,13 @@ class SyncDriver:
         raw = self._transport.send(provider_request)
         return settle(self._adapters, self._settings, action, raw)
 
+    def _random(self, action: steps.Random) -> Step:
+        return steps.RandomOutcome(random.random())
+
+    def _sleep(self, action: steps.Sleep) -> Step:
+        time.sleep(action.seconds)
+        return steps.SleepOutcome()
+
     def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -162,4 +208,6 @@ class SyncDriver:
         steps.Dispatch: _dispatch,
         steps.Return: _return,
         steps.Raise: _raise,
+        steps.Random: _random,
+        steps.Sleep: _sleep,
     }

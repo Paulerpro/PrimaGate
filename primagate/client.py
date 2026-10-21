@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Required, TypedDict, cast, overload
@@ -22,6 +23,7 @@ from primagate.schema.types import (
     Message,
     ToolCall,
 )
+from primagate.schema.wire import DEFAULT_RETRY, RetryPolicy
 
 DEFAULT_TIMEOUT = 60.0
 
@@ -68,6 +70,9 @@ class PrimaGate:
         timeout: float = DEFAULT_TIMEOUT,
         drop_params: DropParams = None,
         provider_routing: Mapping[str, Sequence[Mapping[str, str]]] | None = None,
+        max_retries: int = DEFAULT_RETRY.max_retries,
+        backoff_base: float = DEFAULT_RETRY.backoff_base,
+        backoff_max: float = DEFAULT_RETRY.backoff_max,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -76,6 +81,7 @@ class PrimaGate:
         check_drop_params(drop_params)
         # Validated here so a bad declaration fails at setup, not on the first failing call.
         self._provider_routing = parse_provider_routing(provider_routing)
+        self._retry = _retry_policy(max_retries, backoff_base, backoff_max)
         self._drop_params = drop_params
         self._api_keys = dict(api_keys or {})
         self._base_urls = dict(base_urls or {})
@@ -159,6 +165,8 @@ class PrimaGate:
                     base_urls=self._base_urls,
                     timeout=self._timeout,
                     http_transport=self._http_transport,
+                    routing=self._provider_routing,
+                    retry=self._retry,
                 )
             return self._driver
 
@@ -171,12 +179,37 @@ class PrimaGate:
                     base_urls=self._base_urls,
                     timeout=self._timeout,
                     http_transport=cast(httpx2.AsyncBaseTransport | None, self._http_transport),
+                    routing=self._provider_routing,
+                    retry=self._retry,
                 )
             return self._async_driver
 
     def _check_open(self) -> None:
         if self._closed:
             raise PrimaGateError("PrimaGate instance is closed")
+
+
+def _retry_policy(max_retries: object, backoff_base: object, backoff_max: object) -> RetryPolicy:
+    # bool is an int subclass, and `True` as a retry count is a mistake worth catching.
+    if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+        raise BadRequestError("max_retries must be an integer of 0 or more")
+    base = _delay_setting("backoff_base", backoff_base)
+    longest = _delay_setting("backoff_max", backoff_max)
+    if longest < base:
+        raise BadRequestError("backoff_max must not be below backoff_base")
+    return RetryPolicy(max_retries, base, longest)
+
+
+def _delay_setting(name: str, value: object) -> float:
+    # nan and inf would reach time.sleep and fail or hang mid-call, so they are refused here.
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise BadRequestError(f"{name} must be a finite number above 0")
+    return float(value)
 
 
 # Spelled out because postponed annotations hide Required[] from TypedDict introspection.

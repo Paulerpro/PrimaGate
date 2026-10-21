@@ -39,15 +39,6 @@ def test_with_routing_off_a_failing_call_makes_exactly_one_request(
 
 
 @pytest.mark.parametrize("provider", MODELS)
-def test_a_declaration_alone_does_not_add_requests(call: Caller, provider: str) -> None:
-    gate, sent = _gate(provider_routing={MODELS[provider]: SECOND})
-    with pytest.raises(errors.ServiceUnavailableError):
-        call(gate, model=MODELS[provider], messages=MSGS)
-    assert len(sent) == 1
-    assert sent[0].url.host != "b.test"
-
-
-@pytest.mark.parametrize("provider", MODELS)
 def test_setup_rejects_routing_on_without_an_endpoint(provider: str) -> None:
     with pytest.raises(errors.BadRequestError, match=MODELS[provider]):
         PrimaGate(api_keys=KEYS, provider_routing={MODELS[provider]: []})

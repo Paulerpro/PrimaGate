@@ -11,7 +11,7 @@ from primagate.core.ports import Adapter
 from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, Metadata
-from primagate.schema.wire import ProviderRequest, RawEvent, RawOutcome
+from primagate.schema.wire import ProviderRequest, ProviderSettings, RawEvent, RawOutcome
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,19 @@ class Finished:
     response: ChatCompletion
 
 
-Step = steps.DispatchOutcome | Finished
+Step = steps.Outcome | Finished
+
+
+def credentials(settings: SettingsSource, action: steps.Dispatch) -> ProviderSettings:
+    """The URL and key this dispatch is sent with; a redundant endpoint may bring its own."""
+    endpoint = action.endpoint
+    if endpoint is not None and endpoint.api_key:
+        # Its own key means the provider's configured key is never needed, or looked up.
+        return ProviderSettings(api_key=endpoint.api_key, base_url=endpoint.base_url)
+    configured = settings[action.provider]
+    if endpoint is None:
+        return configured
+    return ProviderSettings(api_key=configured.api_key, base_url=endpoint.base_url)
 
 
 def prepare(
@@ -28,7 +40,7 @@ def prepare(
     action: steps.Dispatch,
 ) -> ProviderRequest:
     adapter = adapters[action.provider]
-    config = settings[action.provider]
+    config = credentials(settings, action)
     return adapter.build_request(action.request, api_key=config.api_key, base_url=config.base_url)
 
 
@@ -48,7 +60,7 @@ def settle(
         error = adapter.map_error(raw)
     except PrimaGateError as err:
         error = err
-    return steps.DispatchOutcome(error=error.redact([settings[action.provider].api_key]))
+    return steps.DispatchOutcome(error=error.redact([credentials(settings, action).api_key]))
 
 
 END: Final = object()
