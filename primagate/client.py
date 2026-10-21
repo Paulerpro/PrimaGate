@@ -12,6 +12,7 @@ from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
+    parse_fallbacks,
     parse_provider_routing,
 )
 from primagate.drivers.sync import SyncDriver, SyncStream
@@ -70,6 +71,8 @@ class PrimaGate:
         timeout: float = DEFAULT_TIMEOUT,
         drop_params: DropParams = None,
         provider_routing: Mapping[str, Sequence[Mapping[str, str]]] | None = None,
+        fallbacks: Mapping[str, Sequence[str]] | None = None,
+        default_fallbacks: Sequence[str] | None = None,
         max_retries: int = DEFAULT_RETRY.max_retries,
         backoff_base: float = DEFAULT_RETRY.backoff_base,
         backoff_max: float = DEFAULT_RETRY.backoff_max,
@@ -82,6 +85,8 @@ class PrimaGate:
         # Validated here so a bad declaration fails at setup, not on the first failing call.
         self._provider_routing = parse_provider_routing(provider_routing)
         self._retry = _retry_policy(max_retries, backoff_base, backoff_max)
+        # Validated here so a bad list fails at setup, not on the first failing call.
+        self._fallbacks = parse_fallbacks(fallbacks, default_fallbacks)
         self._drop_params = drop_params
         self._api_keys = dict(api_keys or {})
         self._base_urls = dict(base_urls or {})

@@ -8,10 +8,11 @@ from types import MappingProxyType
 from typing import Protocol
 
 from primagate.adapters import anthropic, openai
+from primagate.core import fallbacks as core_fallbacks
 from primagate.core.call import parse_drop_params, resolve_model
 from primagate.core.ports import Adapter
 from primagate.schema.errors import AuthenticationError, BadRequestError
-from primagate.schema.wire import Endpoint, ProviderSettings
+from primagate.schema.wire import Endpoint, Fallbacks, ProviderSettings
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,43 @@ def _endpoint(model: str, raw: object) -> Endpoint:
     if api_key is not None and not isinstance(api_key, str):
         raise BadRequestError(f"An endpoint for '{model}' has an api_key that is not a string")
     return Endpoint(base_url=base_url, api_key=api_key)
+
+
+def parse_fallbacks(per_model: object, default: object) -> Fallbacks:
+    """Validate the Fallback List declaration; nothing declared is the same as an empty list."""
+    parsed: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {}
+    if per_model is not None:
+        if not isinstance(per_model, Mapping):
+            raise BadRequestError("fallbacks must map each model to a list of fallback models")
+        for name, entries in per_model.items():
+            key = _fallback_model("fallbacks", name)
+            if key in parsed:
+                raise BadRequestError(f"fallbacks lists model '{name}' more than once")
+            parsed[key] = _fallback_list(f"fallbacks for '{name}'", entries)
+    return Fallbacks(
+        MappingProxyType(parsed),
+        () if default is None else _fallback_list("default_fallbacks", default),
+    )
+
+
+def _fallback_list(label: str, value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise BadRequestError(f"{label} must be a list of model names")
+    return tuple(_fallback_model(label, entry, reserved=True) for entry in value)
+
+
+def _fallback_model(label: str, name: object, *, reserved: bool = False) -> tuple[str, str]:
+    if not isinstance(name, str) or not name.strip():
+        raise BadRequestError(f"{label} must name models with non-empty strings (got {name!r})")
+    if reserved and name in core_fallbacks.RESERVED_MODEL_NAMES:
+        raise BadRequestError(
+            f"{label} names '{name}', which is the Tier Routing alias; "
+            "a fallback must be a concrete model"
+        )
+    provider, model = resolve_model(name)
+    if not model.strip():
+        raise BadRequestError(f"{label} names '{name}' without a model")
+    return provider, model
 
 
 class SettingsResolver:

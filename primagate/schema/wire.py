@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 
@@ -82,3 +84,15 @@ class RetryPolicy:
 
 
 DEFAULT_RETRY = RetryPolicy()
+
+
+@dataclass(frozen=True)
+class Fallbacks:
+    """The Caller's declared fallback models, as resolved (provider, model) pairs."""
+
+    # An entry here, even an empty one, replaces `default` for that model.
+    per_model: Mapping[tuple[str, str], tuple[tuple[str, str], ...]]
+    default: tuple[tuple[str, str], ...] = ()
+
+
+NO_FALLBACKS = Fallbacks(MappingProxyType({}))
