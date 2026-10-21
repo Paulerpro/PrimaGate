@@ -91,10 +91,36 @@ class Choice(_Serializable):
 
 
 @dataclass
+class ErrorInfo(_Serializable):
+    """A failure reduced to plain data so a chain can be serialized."""
+
+    type: str
+    message: str
+    status_code: int | None = None
+
+
+@dataclass
+class DispatchRecord(_Serializable):
+    # The provider's name until redundant endpoints get names of their own.
+    endpoint: str
+    retries: int
+    error: ErrorInfo | None = None
+
+
+@dataclass
+class Attempt(_Serializable):
+    """One candidate model run to completion or failure, with every dispatch it took."""
+
+    model: str
+    dispatches: list[DispatchRecord]
+
+
+@dataclass
 class Metadata(_Serializable):
-    """What the SDK did to a call beyond relaying it; absent when there is nothing to report."""
+    """What the SDK did to a call beyond relaying it."""
 
     dropped_params: list[str] = field(default_factory=list)
+    attempt_chain: list[Attempt] = field(default_factory=list)
 
 
 @dataclass

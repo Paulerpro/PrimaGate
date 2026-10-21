@@ -145,7 +145,7 @@ def test_supported_named_features_are_kept(call: Caller) -> None:
     gate, sent = _gate()
     result = call(gate, model="gpt-4o", messages=TEXT, tools=[TOOL], drop_params=["tools"])
     assert "tools" in sent[0]
-    assert result.metadata is None
+    assert result.metadata is not None and result.metadata.dropped_params == []
 
 
 @pytest.mark.usefixtures("bare_adapters")
@@ -174,7 +174,7 @@ def test_hint_params_still_raise_without_the_opt_in(call: Caller) -> None:
 def test_n_of_one_is_not_a_drop(call: Caller) -> None:
     gate, _ = _gate()
     result = call(gate, model=MODELS["anthropic"], messages=TEXT, n=1, drop_params=True)
-    assert result.metadata is None
+    assert result.metadata is not None and result.metadata.dropped_params == []
 
 
 @pytest.mark.usefixtures("bare_adapters")

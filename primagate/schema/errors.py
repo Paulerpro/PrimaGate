@@ -1,6 +1,8 @@
 from collections.abc import Iterable
 from typing import Self
 
+from primagate.schema.types import Attempt
+
 
 class PrimaGateError(Exception):
     def __init__(
@@ -14,6 +16,8 @@ class PrimaGateError(Exception):
         self.message = message
         self.llm_provider = llm_provider
         self.status_code = status_code
+        # Filled in by core once a dispatch has been made; empty for pre-dispatch errors.
+        self.attempt_chain: list[Attempt] = []
 
     def redact(self, secrets: Iterable[str]) -> Self:
         # Providers sometimes echo the offending key back in their error text.

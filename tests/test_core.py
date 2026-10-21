@@ -13,11 +13,15 @@ from primagate.core.call import (
 )
 from primagate.schema.errors import BadRequestError, RateLimitError, UnsupportedParamsError
 from primagate.schema.types import (
+    Attempt,
     ChatCompletion,
     ChatCompletionRequest,
     Choice,
+    DispatchRecord,
+    ErrorInfo,
     FunctionCall,
     Message,
+    Metadata,
     ToolCall,
 )
 from primagate.schema.wire import Capabilities
@@ -82,17 +86,53 @@ def test_unknown_provider_becomes_raise_action() -> None:
     assert isinstance(action.error, BadRequestError)
 
 
-def test_success_outcome_returns() -> None:
-    resp = _response()
-    action = next_action(steps.DispatchOutcome(response=resp))
-    assert action == steps.Return(resp)
+def _dispatch(provider: str = "openai", model: str = "gpt-4o") -> steps.Dispatch:
+    return steps.Dispatch(provider, _request(model))
 
 
-def test_error_outcome_raises() -> None:
+def test_success_outcome_returns_with_a_one_row_chain() -> None:
+    action = next_action(_dispatch(), steps.DispatchOutcome(response=_response()))
+    assert isinstance(action, steps.Return)
+    assert action.response.metadata == Metadata(
+        attempt_chain=[Attempt("openai/gpt-4o", [DispatchRecord("openai", 0)])]
+    )
+
+
+def test_error_outcome_raises_with_the_failing_dispatch_in_the_chain() -> None:
     err = RateLimitError("slow down", llm_provider="openai", status_code=429)
-    action = next_action(steps.DispatchOutcome(error=err))
+    action = next_action(_dispatch(), steps.DispatchOutcome(error=err))
     assert isinstance(action, steps.Raise)
     assert action.error is err
+    assert err.attempt_chain == [
+        Attempt(
+            "openai/gpt-4o",
+            [DispatchRecord("openai", 0, ErrorInfo("RateLimitError", "slow down", 429))],
+        )
+    ]
+
+
+def test_an_error_before_any_dispatch_has_an_empty_chain() -> None:
+    action = first_action(_request("nope/x"), ALL)
+    assert isinstance(action, steps.Raise) and action.error.attempt_chain == []
+    missing = first_action(_with(tools=[TOOL]), {"openai": BARE})
+    assert isinstance(missing, steps.Raise) and missing.error.attempt_chain == []
+
+
+def test_chain_rows_are_plain_data() -> None:
+    err = RateLimitError("slow down", llm_provider="openai", status_code=429)
+    next_action(_dispatch(), steps.DispatchOutcome(error=err))
+    assert [a.to_dict() for a in err.attempt_chain] == [
+        {
+            "model": "openai/gpt-4o",
+            "dispatches": [
+                {
+                    "endpoint": "openai",
+                    "retries": 0,
+                    "error": {"type": "RateLimitError", "message": "slow down", "status_code": 429},
+                }
+            ],
+        }
+    ]
 
 
 def test_actions_are_immutable() -> None:
@@ -221,9 +261,10 @@ def test_dispatch_records_what_was_dropped_and_the_response_names_it() -> None:
     )
     assert isinstance(action, steps.Dispatch) and action.dropped_params == ("tools",)
     outcome = steps.DispatchOutcome(response=_response(), dropped_params=action.dropped_params)
-    returned = next_action(outcome)
+    returned = next_action(action, outcome)
     assert isinstance(returned, steps.Return)
     assert returned.response.metadata is not None
     assert returned.response.metadata.dropped_params == ["tools"]
-    clean = next_action(steps.DispatchOutcome(response=_response()))
-    assert isinstance(clean, steps.Return) and clean.response.metadata is None
+    clean = next_action(action, steps.DispatchOutcome(response=_response()))
+    assert isinstance(clean, steps.Return) and clean.response.metadata is not None
+    assert clean.response.metadata.dropped_params == []

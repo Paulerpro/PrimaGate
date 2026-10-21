@@ -123,7 +123,8 @@ class AsyncDriver:
             step = await self.perform(action)
             if isinstance(step, Finished):
                 return step.response
-            action = next_action(step)
+            assert isinstance(action, steps.Dispatch)
+            action = next_action(action, step)
 
     async def stream(
         self, request: ChatCompletionRequest, drop_params: object = None
@@ -135,12 +136,12 @@ class AsyncDriver:
         provider_request = prepare(self._adapters, self._settings, action)
         opened = await self._transport.open_stream(provider_request)
         if isinstance(opened, RawOutcome):
-            await self.perform(next_action(settle(self._adapters, self._settings, action, opened)))
+            await self.perform(
+                next_action(action, settle(self._adapters, self._settings, action, opened))
+            )
             raise PrimaGateError("Stream open failed without an error")
         key = self._settings[action.provider].api_key
-        state = StreamState(
-            self._adapters[action.provider], key, opened.headers, action.dropped_params
-        )
+        state = StreamState(self._adapters[action.provider], key, opened.headers, action)
         stream = AsyncStream(opened, state)
         await stream.prime()
         return stream

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from primagate.core import steps
+from primagate.core.call import attempt_chain
 from primagate.core.ports import Adapter
 from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
@@ -61,10 +62,11 @@ class StreamState:
         adapter: Adapter,
         api_key: str,
         headers: Mapping[str, str],
-        dropped_params: tuple[str, ...] = (),
+        action: steps.Dispatch,
     ) -> None:
         self._adapter = adapter
-        self._dropped = list(dropped_params)
+        self._action = action
+        self._dropped = list(action.dropped_params)
         self._api_key = api_key
         self._parser = adapter.new_stream_parser(headers)
         self._queue: deque[ChatCompletionChunk] = deque()
@@ -80,19 +82,27 @@ class StreamState:
 
     def fail(self, kind: str) -> None:
         raw = RawOutcome(status=None, headers={}, body=b"", failure=kind)
-        self._error = self._adapter.map_error(raw).redact([self._api_key])
+        self._error = self._with_chain(self._adapter.map_error(raw))
         self._finished = True
+
+    def _with_chain(self, error: PrimaGateError) -> PrimaGateError:
+        error.redact([self._api_key])
+        error.attempt_chain = attempt_chain(self._action, error)
+        return error
 
     def _produce(self, make: Callable[[], list[ChatCompletionChunk]]) -> None:
         try:
             chunks = make()
             for chunk in chunks:
                 # The final chunk is where finish reason and usage already live.
-                if self._dropped and any(c.finish_reason for c in chunk.choices):
-                    chunk.metadata = Metadata(dropped_params=list(self._dropped))
+                if any(c.finish_reason for c in chunk.choices):
+                    chunk.metadata = Metadata(
+                        dropped_params=list(self._dropped),
+                        attempt_chain=attempt_chain(self._action),
+                    )
             self._queue.extend(chunks)
         except PrimaGateError as err:
-            self._error = err.redact([self._api_key])
+            self._error = self._with_chain(err)
             self._finished = True
 
     def next_item(self) -> ChatCompletionChunk | object | None:

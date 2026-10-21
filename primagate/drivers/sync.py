@@ -120,7 +120,8 @@ class SyncDriver:
             step = self.perform(action)
             if isinstance(step, Finished):
                 return step.response
-            action = next_action(step)
+            assert isinstance(action, steps.Dispatch)
+            action = next_action(action, step)
 
     def stream(self, request: ChatCompletionRequest, drop_params: object = None) -> SyncStream:
         action = first_action(request, self._capabilities, parse_drop_params(drop_params))
@@ -130,12 +131,12 @@ class SyncDriver:
         provider_request = prepare(self._adapters, self._settings, action)
         opened = self._transport.open_stream(provider_request)
         if isinstance(opened, RawOutcome):
-            self.perform(next_action(settle(self._adapters, self._settings, action, opened)))
+            self.perform(
+                next_action(action, settle(self._adapters, self._settings, action, opened))
+            )
             raise PrimaGateError("Stream open failed without an error")
         key = self._settings[action.provider].api_key
-        state = StreamState(
-            self._adapters[action.provider], key, opened.headers, action.dropped_params
-        )
+        state = StreamState(self._adapters[action.provider], key, opened.headers, action)
         stream = SyncStream(opened, state)
         stream.prime()
         return stream

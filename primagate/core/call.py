@@ -7,7 +7,14 @@ from typing import Any
 
 from primagate.core.steps import Action, Dispatch, DispatchOutcome, Raise, Return
 from primagate.schema.errors import BadRequestError, PrimaGateError, UnsupportedParamsError
-from primagate.schema.types import ChatCompletionRequest, Message, Metadata
+from primagate.schema.types import (
+    Attempt,
+    ChatCompletionRequest,
+    DispatchRecord,
+    ErrorInfo,
+    Message,
+    Metadata,
+)
 from primagate.schema.wire import Capabilities
 
 DEFAULT_PROVIDER = "openai"
@@ -146,14 +153,24 @@ def first_action(
     return Dispatch(provider, dataclasses.replace(request, model=model), tuple(dropped))
 
 
-def next_action(outcome: DispatchOutcome) -> Action:
+def attempt_chain(action: Dispatch, error: PrimaGateError | None = None) -> list[Attempt]:
+    """The chain after one dispatch: a single Attempt holding a single dispatch."""
+    info = ErrorInfo(type(error).__name__, error.message, error.status_code) if error else None
+    return [
+        Attempt(
+            f"{action.provider}/{action.request.model}", [DispatchRecord(action.provider, 0, info)]
+        )
+    ]
+
+
+def next_action(action: Dispatch, outcome: DispatchOutcome) -> Action:
+    """Decide what follows `action`'s outcome."""
     if outcome.error is not None:
+        outcome.error.attempt_chain = attempt_chain(action, outcome.error)
         return Raise(outcome.error)
     if outcome.response is None:
         return Raise(PrimaGateError("Dispatch produced neither a response nor an error"))
-    response = outcome.response
-    if outcome.dropped_params:
-        response = dataclasses.replace(
-            response, metadata=Metadata(dropped_params=list(outcome.dropped_params))
-        )
-    return Return(response)
+    metadata = Metadata(
+        dropped_params=list(outcome.dropped_params), attempt_chain=attempt_chain(action)
+    )
+    return Return(dataclasses.replace(outcome.response, metadata=metadata))

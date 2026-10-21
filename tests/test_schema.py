@@ -98,7 +98,7 @@ def test_tool_result_without_content_still_sends_a_null_content() -> None:
     }
 
 
-def test_metadata_is_omitted_until_something_is_dropped() -> None:
+def test_metadata_is_omitted_until_the_core_fills_it() -> None:
     from primagate.schema.types import ChatCompletion, Choice, Message, Metadata
 
     choice = Choice(index=0, message=Message(role="assistant", content="x"))
@@ -107,4 +107,4 @@ def test_metadata_is_omitted_until_something_is_dropped() -> None:
     named = ChatCompletion(
         id="c", created=1, model="m", choices=[choice], metadata=Metadata(dropped_params=["tools"])
     )
-    assert named.to_dict()["metadata"] == {"dropped_params": ["tools"]}
+    assert named.to_dict()["metadata"] == {"dropped_params": ["tools"], "attempt_chain": []}
