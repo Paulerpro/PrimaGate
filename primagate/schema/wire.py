@@ -61,3 +61,12 @@ class Capabilities:
 class ProviderSettings:
     api_key: str = field(repr=False)
     base_url: str
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    """A redundant place to serve a model from, on the same provider as that model."""
+
+    base_url: str
+    # None means the provider's own key; it stays out of repr like every other key.
+    api_key: str | None = field(default=None, repr=False)

@@ -8,7 +8,11 @@ import httpx2
 from typing_extensions import Unpack
 
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
-from primagate.drivers.providers import check_drop_params, check_provider_names
+from primagate.drivers.providers import (
+    check_drop_params,
+    check_provider_names,
+    parse_provider_routing,
+)
 from primagate.drivers.sync import SyncDriver, SyncStream
 from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.types import (
@@ -63,12 +67,15 @@ class PrimaGate:
         base_urls: Mapping[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         drop_params: DropParams = None,
+        provider_routing: Mapping[str, Sequence[Mapping[str, str]]] | None = None,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
         check_provider_names("api_keys", api_keys or {})
         check_provider_names("base_urls", base_urls or {})
         check_drop_params(drop_params)
+        # Validated here so a bad declaration fails at setup, not on the first failing call.
+        self._provider_routing = parse_provider_routing(provider_routing)
         self._drop_params = drop_params
         self._api_keys = dict(api_keys or {})
         self._base_urls = dict(base_urls or {})

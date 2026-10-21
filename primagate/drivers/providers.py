@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Protocol
 
 from primagate.adapters import anthropic, openai
-from primagate.core.call import parse_drop_params
+from primagate.core.call import parse_drop_params, resolve_model
 from primagate.core.ports import Adapter
 from primagate.schema.errors import AuthenticationError, BadRequestError
-from primagate.schema.wire import ProviderSettings
+from primagate.schema.wire import Endpoint, ProviderSettings
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,51 @@ def check_provider_names(label: str, names: Mapping[str, object]) -> None:
 
 def check_drop_params(value: object) -> None:
     parse_drop_params(value)
+
+
+ProviderRouting = Mapping[tuple[str, str], tuple[Endpoint, ...]]
+_ENDPOINT_FIELDS = frozenset({"base_url", "api_key"})
+
+
+def parse_provider_routing(value: object) -> ProviderRouting:
+    """Validate the per-model endpoint declaration; a listed model has Provider Routing on.
+
+    Messages name the model and the problem but never echo an endpoint's contents, which may
+    hold a key.
+    """
+    if value is None:
+        return MappingProxyType({})
+    if not isinstance(value, Mapping):
+        raise BadRequestError("provider_routing must map each model to its redundant endpoints")
+    parsed: dict[tuple[str, str], tuple[Endpoint, ...]] = {}
+    for name, endpoints in value.items():
+        if not isinstance(name, str):
+            raise BadRequestError("provider_routing keys must be model names")
+        key = resolve_model(name)
+        if key in parsed:
+            raise BadRequestError(f"provider_routing lists model '{name}' more than once")
+        if not isinstance(endpoints, Sequence) or isinstance(endpoints, str | bytes):
+            raise BadRequestError(f"provider_routing for '{name}' must be a list of endpoints")
+        if not endpoints:
+            raise BadRequestError(
+                f"Provider Routing is on for '{name}' but no redundant endpoint is declared"
+            )
+        parsed[key] = tuple(_endpoint(name, e) for e in endpoints)
+    return MappingProxyType(parsed)
+
+
+def _endpoint(model: str, raw: object) -> Endpoint:
+    if not isinstance(raw, Mapping):
+        raise BadRequestError(f"An endpoint for '{model}' must be a mapping with a base_url")
+    unknown = sorted(str(k) for k in set(raw) - _ENDPOINT_FIELDS)
+    if unknown:
+        raise BadRequestError(f"An endpoint for '{model}' has unknown field '{unknown[0]}'")
+    base_url, api_key = raw.get("base_url"), raw.get("api_key")
+    if not isinstance(base_url, str) or not base_url:
+        raise BadRequestError(f"An endpoint for '{model}' needs a non-empty base_url")
+    if api_key is not None and not isinstance(api_key, str):
+        raise BadRequestError(f"An endpoint for '{model}' has an api_key that is not a string")
+    return Endpoint(base_url=base_url, api_key=api_key)
 
 
 class SettingsResolver:
