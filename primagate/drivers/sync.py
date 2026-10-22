@@ -28,7 +28,14 @@ from primagate.drivers.providers import (
 )
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
-from primagate.schema.wire import DEFAULT_RETRY, RawOutcome, RetryPolicy, StreamFailure
+from primagate.schema.wire import (
+    DEFAULT_RETRY,
+    NO_FALLBACKS,
+    Fallbacks,
+    RawOutcome,
+    RetryPolicy,
+    StreamFailure,
+)
 from primagate.transport.sync import SyncEventStream, SyncTransport
 
 _NOTHING = object()
@@ -107,12 +114,14 @@ class SyncDriver:
         transport: SyncTransport,
         routing: ProviderRouting | None = None,
         retry: RetryPolicy = DEFAULT_RETRY,
+        fallbacks: Fallbacks = NO_FALLBACKS,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
         self._transport = transport
         self._routing = routing
         self._retry = retry
+        self._fallbacks = fallbacks
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -125,6 +134,7 @@ class SyncDriver:
         http_transport: httpx2.BaseTransport | None = None,
         routing: ProviderRouting | None = None,
         retry: RetryPolicy = DEFAULT_RETRY,
+        fallbacks: Fallbacks = NO_FALLBACKS,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -132,6 +142,7 @@ class SyncDriver:
             transport=SyncTransport(timeout=timeout, transport=http_transport),
             routing=routing,
             retry=retry,
+            fallbacks=fallbacks,
         )
 
     def close(self) -> None:
@@ -139,7 +150,12 @@ class SyncDriver:
 
     def _first(self, request: ChatCompletionRequest, drop_params: object) -> steps.Action:
         return first_action(
-            request, self._capabilities, parse_drop_params(drop_params), self._routing, self._retry
+            request,
+            self._capabilities,
+            parse_drop_params(drop_params),
+            self._routing,
+            self._retry,
+            self._fallbacks,
         )
 
     def run(self, request: ChatCompletionRequest, drop_params: object = None) -> ChatCompletion:

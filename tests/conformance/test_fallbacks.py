@@ -8,7 +8,6 @@ from primagate import PrimaGate
 from primagate.schema import errors
 
 MODELS = {"openai": "gpt-4o", "anthropic": "claude-sonnet-5-5"}
-OTHER = {"openai": "claude-sonnet-5-5", "anthropic": "gpt-4o"}
 MSGS = [{"role": "user", "content": "hi"}]
 KEYS = {"openai": "sk-o", "anthropic": "sk-a"}
 
@@ -38,17 +37,6 @@ def test_no_fallback_list_is_the_same_as_an_empty_one(
     call: Caller, provider: str, declared: dict[str, Any]
 ) -> None:
     gate, sent = _failing(**declared)
-    with pytest.raises(errors.ServiceUnavailableError) as raised:
-        call(gate, model=MODELS[provider], messages=MSGS)
-    assert len(sent) == 1
-    assert len(raised.value.attempt_chain) == 1
-
-
-@pytest.mark.parametrize("provider", MODELS)
-def test_a_declared_list_does_not_change_a_failing_call(call: Caller, provider: str) -> None:
-    gate, sent = _failing(
-        fallbacks={MODELS[provider]: [OTHER[provider]]}, default_fallbacks=[OTHER[provider]]
-    )
     with pytest.raises(errors.ServiceUnavailableError) as raised:
         call(gate, model=MODELS[provider], messages=MSGS)
     assert len(sent) == 1

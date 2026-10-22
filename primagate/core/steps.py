@@ -1,10 +1,38 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from primagate.schema.errors import PrimaGateError
-from primagate.schema.types import ChatCompletion, ChatCompletionRequest, DispatchRecord
-from primagate.schema.wire import Endpoint, RetryPolicy
+from primagate.schema.types import (
+    Attempt,
+    ChatCompletion,
+    ChatCompletionRequest,
+    DispatchRecord,
+)
+from primagate.schema.wire import Capabilities, Endpoint, RetryPolicy
+
+
+@dataclass(frozen=True)
+class DropPolicy:
+    """What the caller allowed to be dropped: hint parameters, and/or the named features."""
+
+    hints: bool = False
+    features: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What the next fallback needs, kept with the call because each candidate is judged by
+    its own provider's capabilities and routing when its turn comes."""
+
+    # The Caller's request before any drops or model-name stripping.
+    request: ChatCompletionRequest
+    capabilities: Mapping[str, Capabilities]
+    drops: DropPolicy
+    routing: Mapping[tuple[str, str], tuple[Endpoint, ...]]
+    retry: RetryPolicy
+    later: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -29,6 +57,10 @@ class Dispatch:
     route: Route | None = None
     # Rows of the endpoints already given up on, so any later error carries the whole chain.
     history: tuple[DispatchRecord, ...] = ()
+    # Attempts already over, for models tried before this one.
+    past: tuple[Attempt, ...] = ()
+    # None when no fallback remains.
+    plan: Plan | None = None
 
 
 @dataclass(frozen=True)

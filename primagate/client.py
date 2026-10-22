@@ -172,6 +172,7 @@ class PrimaGate:
                     http_transport=self._http_transport,
                     routing=self._provider_routing,
                     retry=self._retry,
+                    fallbacks=self._fallbacks,
                 )
             return self._driver
 
@@ -186,6 +187,7 @@ class PrimaGate:
                     http_transport=cast(httpx2.AsyncBaseTransport | None, self._http_transport),
                     routing=self._provider_routing,
                     retry=self._retry,
+                    fallbacks=self._fallbacks,
                 )
             return self._async_driver
 

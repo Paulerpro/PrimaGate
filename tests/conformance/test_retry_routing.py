@@ -1,6 +1,4 @@
-import asyncio
 import random
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -61,20 +59,6 @@ class Run:
     @property
     def hosts(self) -> list[str]:
         return [r.url.host for r in self.sent]
-
-
-@pytest.fixture
-def delays(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record every sleep instead of waiting, and make jitter a fixed full-scale value."""
-    waited: list[float] = []
-
-    async def fake_async(seconds: float) -> None:
-        waited.append(seconds)
-
-    monkeypatch.setattr(time, "sleep", waited.append)
-    monkeypatch.setattr(asyncio, "sleep", fake_async)
-    monkeypatch.setattr(random, "random", lambda: 1.0)
-    return waited
 
 
 def _routed(provider: str) -> dict[str, Any]:

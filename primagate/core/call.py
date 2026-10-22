@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from primagate.core.classify import Fate, classify
+from primagate.core.fallbacks import fallback_candidates
 from primagate.core.steps import (
     Action,
     Dispatch,
     DispatchOutcome,
+    DropPolicy,
     Outcome,
+    Plan,
     Raise,
     Random,
     RandomOutcome,
@@ -28,7 +30,14 @@ from primagate.schema.types import (
     Message,
     Metadata,
 )
-from primagate.schema.wire import DEFAULT_RETRY, Capabilities, Endpoint, RetryPolicy
+from primagate.schema.wire import (
+    DEFAULT_RETRY,
+    NO_FALLBACKS,
+    Capabilities,
+    Endpoint,
+    Fallbacks,
+    RetryPolicy,
+)
 
 DEFAULT_PROVIDER = "openai"
 KNOWN_PROVIDERS = frozenset({"openai", "anthropic"})
@@ -43,14 +52,6 @@ _HINTS: dict[str, Callable[[ChatCompletionRequest], bool]] = {
     "n": lambda r: r.n is not None and r.n > 1,
     "seed": lambda r: r.seed is not None,
 }
-
-
-@dataclass(frozen=True)
-class DropPolicy:
-    """What the caller allowed to be dropped: hint parameters, and/or the named features."""
-
-    hints: bool = False
-    features: frozenset[str] = frozenset()
 
 
 NO_DROPS = DropPolicy()
@@ -139,39 +140,57 @@ def apply_drops(
     return dataclasses.replace(request, **changes), dropped
 
 
-def first_action(
+def _build(
     request: ChatCompletionRequest,
+    provider: str,
+    model: str,
     capabilities: Mapping[str, Capabilities],
-    policy: DropPolicy = NO_DROPS,
-    routing: Mapping[tuple[str, str], tuple[Endpoint, ...]] | None = None,
-    retry: RetryPolicy = DEFAULT_RETRY,
-) -> Action:
-    try:
-        provider, model = resolve_model(request.model)
-    except PrimaGateError as err:
-        return Raise(err)
+    drops: DropPolicy,
+    routing: Mapping[tuple[str, str], tuple[Endpoint, ...]],
+    retry: RetryPolicy,
+) -> Dispatch:
+    """The first dispatch of one model's Attempt, or the reason it cannot be made."""
     declared = capabilities.get(provider)
     if declared is None:
-        return Raise(PrimaGateError(f"No adapter is registered for provider '{provider}'"))
-    request, dropped = apply_drops(request, declared, policy)
+        raise PrimaGateError(f"No adapter is registered for provider '{provider}'")
+    request, dropped = apply_drops(request, declared, drops)
     missing = [f for f in required_features(request) if not getattr(declared, f)]
     if missing:
         names = [_FEATURE_DROP_NAMES[f] for f in missing]
         listed = ", ".join(f'"{n}"' for n in names)
-        return Raise(
-            UnsupportedParamsError(
-                f"{provider} does not support {', '.join(names)} for model '{model}'. "
-                f"Pass drop_params=[{listed}] to drop them and continue without",
-                llm_provider=provider,
-            )
+        raise UnsupportedParamsError(
+            f"{provider} does not support {', '.join(names)} for model '{model}'. "
+            f"Pass drop_params=[{listed}] to drop them and continue without",
+            llm_provider=provider,
         )
-    redundant = (routing or {}).get((provider, model))
+    redundant = routing.get((provider, model))
     return Dispatch(
         provider,
         dataclasses.replace(request, model=model),
         tuple(dropped),
         route=Route(redundant, retry) if redundant else None,
     )
+
+
+def first_action(
+    request: ChatCompletionRequest,
+    capabilities: Mapping[str, Capabilities],
+    policy: DropPolicy = NO_DROPS,
+    routing: Mapping[tuple[str, str], tuple[Endpoint, ...]] | None = None,
+    retry: RetryPolicy = DEFAULT_RETRY,
+    fallbacks: Fallbacks = NO_FALLBACKS,
+) -> Action:
+    routes = routing or {}
+    try:
+        provider, model = resolve_model(request.model)
+        first = _build(request, provider, model, capabilities, policy, routes, retry)
+    except PrimaGateError as err:
+        return Raise(err)
+    later = fallback_candidates((provider, model), fallbacks)
+    if not later:
+        return first
+    plan = Plan(request, capabilities, policy, routes, retry, later)
+    return dataclasses.replace(first, plan=plan)
 
 
 def _label(action: Dispatch) -> str:
@@ -184,9 +203,9 @@ def _record(action: Dispatch, error: PrimaGateError | None = None) -> DispatchRe
 
 
 def attempt_chain(action: Dispatch, error: PrimaGateError | None = None) -> list[Attempt]:
-    """The chain so far: one Attempt, a row per endpoint tried, the last being `action`'s."""
+    """The chain so far: the Attempts already over, then this one with a row per endpoint."""
     model = f"{action.provider}/{action.request.model}"
-    return [Attempt(model, [*action.history, _record(action, error)])]
+    return [*action.past, Attempt(model, [*action.history, _record(action, error)])]
 
 
 def _delay(policy: RetryPolicy, retry: int, random_value: float) -> float:
@@ -200,10 +219,34 @@ def _delay(policy: RetryPolicy, retry: int, random_value: float) -> float:
     return nominal / 2 + nominal / 2 * random_value
 
 
+def _next_attempt(action: Dispatch, plan: Plan, error: PrimaGateError) -> Dispatch | None:
+    """Start the first remaining fallback that can take the request, if any."""
+    finished = tuple(attempt_chain(action, error))
+    for index, (provider, model) in enumerate(plan.later):
+        try:
+            built = _build(
+                plan.request,
+                provider,
+                model,
+                plan.capabilities,
+                plan.drops,
+                plan.routing,
+                plan.retry,
+            )
+        except PrimaGateError:
+            # A candidate that cannot take this request is not an Attempt, so it is passed over.
+            continue
+        rest = plan.later[index + 1 :]
+        return dataclasses.replace(
+            built, past=finished, plan=dataclasses.replace(plan, later=rest) if rest else None
+        )
+    return None
+
+
 def _after_failure(action: Dispatch, error: PrimaGateError) -> Action:
+    fate = classify(error)
     route = action.route
     if route is not None:
-        fate = classify(error)
         if fate is Fate.RETRY and action.retries < route.policy.max_retries:
             return Random(dataclasses.replace(action, retries=action.retries + 1))
         if fate in (Fate.RETRY, Fate.ADVANCE) and action.position < len(route.redundant):
@@ -214,6 +257,11 @@ def _after_failure(action: Dispatch, error: PrimaGateError) -> Action:
                 retries=0,
                 history=(*action.history, _record(action, error)),
             )
+    # The model's Attempt is over; only a RAISE-class error ends the whole chain.
+    if fate in (Fate.RETRY, Fate.ADVANCE) and action.plan is not None:
+        following = _next_attempt(action, action.plan, error)
+        if following is not None:
+            return following
     error.attempt_chain = attempt_chain(action, error)
     return Raise(error)
 

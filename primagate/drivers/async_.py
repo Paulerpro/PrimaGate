@@ -28,7 +28,14 @@ from primagate.drivers.providers import (
 )
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
-from primagate.schema.wire import DEFAULT_RETRY, RawOutcome, RetryPolicy, StreamFailure
+from primagate.schema.wire import (
+    DEFAULT_RETRY,
+    NO_FALLBACKS,
+    Fallbacks,
+    RawOutcome,
+    RetryPolicy,
+    StreamFailure,
+)
 from primagate.transport.async_ import AsyncEventStream, AsyncTransport
 
 _NOTHING = object()
@@ -108,12 +115,14 @@ class AsyncDriver:
         transport: AsyncTransport,
         routing: ProviderRouting | None = None,
         retry: RetryPolicy = DEFAULT_RETRY,
+        fallbacks: Fallbacks = NO_FALLBACKS,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
         self._transport = transport
         self._routing = routing
         self._retry = retry
+        self._fallbacks = fallbacks
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -126,6 +135,7 @@ class AsyncDriver:
         http_transport: httpx2.AsyncBaseTransport | None = None,
         routing: ProviderRouting | None = None,
         retry: RetryPolicy = DEFAULT_RETRY,
+        fallbacks: Fallbacks = NO_FALLBACKS,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -133,6 +143,7 @@ class AsyncDriver:
             transport=AsyncTransport(timeout=timeout, transport=http_transport),
             routing=routing,
             retry=retry,
+            fallbacks=fallbacks,
         )
 
     async def aclose(self) -> None:
@@ -140,7 +151,12 @@ class AsyncDriver:
 
     def _first(self, request: ChatCompletionRequest, drop_params: object) -> steps.Action:
         return first_action(
-            request, self._capabilities, parse_drop_params(drop_params), self._routing, self._retry
+            request,
+            self._capabilities,
+            parse_drop_params(drop_params),
+            self._routing,
+            self._retry,
+            self._fallbacks,
         )
 
     async def run(

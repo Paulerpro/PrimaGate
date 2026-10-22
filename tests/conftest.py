@@ -1,4 +1,6 @@
 import asyncio
+import random
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -94,3 +96,17 @@ class StreamCaller:
 @pytest.fixture(params=["sync", "async"])
 def stream_call(request: pytest.FixtureRequest) -> StreamCaller:
     return StreamCaller(request.param)
+
+
+@pytest.fixture
+def delays(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record every sleep instead of waiting, and make jitter a fixed full-scale value."""
+    waited: list[float] = []
+
+    async def fake_async(seconds: float) -> None:
+        waited.append(seconds)
+
+    monkeypatch.setattr(time, "sleep", waited.append)
+    monkeypatch.setattr(asyncio, "sleep", fake_async)
+    monkeypatch.setattr(random, "random", lambda: 1.0)
+    return waited
