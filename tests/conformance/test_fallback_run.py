@@ -170,7 +170,71 @@ def test_a_fallback_that_lacks_a_needed_feature_is_passed_over(
     run = Run({OPENAI: [_status(503), _answer]}, **_fallbacks(CLAUDE, MINI))
     result = call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
     assert _models(run) == [GPT, MINI]
-    assert result.metadata is not None and len(result.metadata.attempt_chain) == 2
+    assert result.metadata is not None
+    chain = result.metadata.attempt_chain
+    assert [a.skipped is None for a in chain] == [True, False, True]
+    assert chain[1].model == "anthropic/claude-sonnet-5-5" and chain[1].dispatches == []
+    reason = chain[1].skipped
+    assert reason is not None and "tools" in reason and "anthropic" in reason
+    wire = result.to_dict()["metadata"]["attempt_chain"]
+    assert "skipped" not in wire[0] and wire[1]["skipped"] == reason
+
+
+def test_every_incapable_fallback_leaves_a_row_and_the_primarys_error_is_raised(
+    call: Caller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+    run = Run({OPENAI: [_status(503)]}, **_fallbacks(CLAUDE))
+    with pytest.raises(errors.ServiceUnavailableError) as raised:
+        call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
+    assert len(run.sent) == 1
+    chain = raised.value.attempt_chain
+    assert [a.skipped is None for a in chain] == [True, False]
+
+
+def test_drop_params_lets_an_incapable_fallback_run_instead_of_being_skipped(
+    call: Caller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+    run = Run({OPENAI: [_status(503)], ANTHROPIC: [_answer]}, **_fallbacks(CLAUDE))
+    result = call(run.gate, model=GPT, messages=MSGS, tools=[TOOL], drop_params=["tools"])
+    assert _models(run) == [GPT, CLAUDE]
+    assert "tools" not in json.loads(run.sent[1].content)
+    assert result.metadata is not None
+    assert result.metadata.dropped_params == ["tools"]
+    assert all(a.skipped is None for a in result.metadata.attempt_chain)
+
+
+def test_a_skipped_row_reaches_a_streams_final_chunk(
+    stream_call: StreamCaller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+    run = Run({OPENAI: [_status(503), _answer]}, **_fallbacks(CLAUDE, MINI))
+    result = stream_call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
+    assert result.call_error is None and result.read_error is None
+    final = result.chunks[-1]
+    assert final.metadata is not None
+    assert [a.skipped is None for a in final.metadata.attempt_chain] == [True, False, True]
+
+
+def test_a_skipped_row_reaches_a_stream_that_fails_to_open(
+    stream_call: StreamCaller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+    run = Run({OPENAI: [_status(503)]}, **_fallbacks(CLAUDE))
+    result = stream_call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
+    assert isinstance(result.call_error, errors.ServiceUnavailableError)
+    assert [a.skipped is None for a in result.call_error.attempt_chain] == [True, False]
+
+
+def test_a_primary_that_lacks_the_feature_raises_first_with_an_empty_chain(
+    call: Caller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+    run = Run({OPENAI: [_answer], ANTHROPIC: [_answer]}, **_fallbacks(GPT))
+    with pytest.raises(errors.UnsupportedParamsError) as raised:
+        call(run.gate, model=CLAUDE, messages=MSGS, tools=[TOOL])
+    assert run.sent == [] and raised.value.attempt_chain == []
 
 
 def test_the_fallbacks_provider_decides_which_params_are_dropped(call: Caller) -> None:
@@ -226,3 +290,34 @@ def test_a_second_fallback_stream_that_fails_early_moves_on_again(
         "anthropic/claude-sonnet-5-5",
         "openai/gpt-4o-mini",
     ]
+
+
+@pytest.mark.parametrize("status", [503, 400])
+def test_a_skipped_row_stays_in_place_when_the_next_fallback_fails(
+    call: Caller, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+    run = Run({OPENAI: [_status(503), _status(status)]}, **_fallbacks(CLAUDE, MINI))
+    with pytest.raises(errors.PrimaGateError) as raised:
+        call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
+    assert _models(run) == [GPT, MINI]
+    chain = raised.value.attempt_chain
+    assert [a.skipped is None for a in chain] == [True, False, True]
+    assert chain[1].model == "anthropic/claude-sonnet-5-5"
+
+
+def test_a_skipped_row_stays_in_place_when_a_stream_fails_after_its_first_chunk(
+    stream_call: StreamCaller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
+
+    def drops(provider: str, stream: bool) -> httpx2.Response:
+        return httpx2.Response(
+            200, stream=Dropping(_stream_body(provider, full=False)), headers=SSE
+        )
+
+    run = Run({OPENAI: [_status(503), drops]}, **_fallbacks(CLAUDE, MINI))
+    result = stream_call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
+    assert result.chunks and isinstance(result.read_error, errors.APIConnectionError)
+    chain = result.read_error.attempt_chain
+    assert [a.skipped is None for a in chain] == [True, False, True]

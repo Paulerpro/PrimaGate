@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from primagate.core.classify import Fate, classify
@@ -219,9 +219,21 @@ def _delay(policy: RetryPolicy, retry: int, random_value: float) -> float:
     return nominal / 2 + nominal / 2 * random_value
 
 
-def _next_attempt(action: Dispatch, plan: Plan, error: PrimaGateError) -> Dispatch | None:
-    """Start the first remaining fallback that can take the request, if any."""
-    finished = tuple(attempt_chain(action, error))
+def count_attempts(chain: Sequence[Attempt]) -> int:
+    """How many rows of `chain` are Attempts; a skipped candidate was never dispatched."""
+    return sum(1 for row in chain if row.skipped is None)
+
+
+def _next_attempt(
+    action: Dispatch, plan: Plan, error: PrimaGateError
+) -> tuple[Dispatch | None, list[Attempt]]:
+    """Start the first remaining fallback that can take the request, and say which were passed.
+
+    Each candidate that cannot take the request leaves a skipped row, using the same message
+    the primary path would raise, so the two paths cannot drift apart.
+    """
+    chain = attempt_chain(action, error)
+    skipped: list[Attempt] = []
     for index, (provider, model) in enumerate(plan.later):
         try:
             built = _build(
@@ -233,14 +245,19 @@ def _next_attempt(action: Dispatch, plan: Plan, error: PrimaGateError) -> Dispat
                 plan.routing,
                 plan.retry,
             )
-        except PrimaGateError:
-            # A candidate that cannot take this request is not an Attempt, so it is passed over.
+        except PrimaGateError as reason:
+            skipped.append(
+                Attempt(f"{provider}/{model}", [], skipped=reason.message or type(reason).__name__)
+            )
             continue
         rest = plan.later[index + 1 :]
-        return dataclasses.replace(
-            built, past=finished, plan=dataclasses.replace(plan, later=rest) if rest else None
+        following = dataclasses.replace(
+            built,
+            past=(*chain, *skipped),
+            plan=dataclasses.replace(plan, later=rest) if rest else None,
         )
-    return None
+        return following, skipped
+    return None, skipped
 
 
 def _after_failure(action: Dispatch, error: PrimaGateError) -> Action:
@@ -258,11 +275,12 @@ def _after_failure(action: Dispatch, error: PrimaGateError) -> Action:
                 history=(*action.history, _record(action, error)),
             )
     # The model's Attempt is over; only a RAISE-class error ends the whole chain.
+    passed: list[Attempt] = []
     if fate in (Fate.RETRY, Fate.ADVANCE) and action.plan is not None:
-        following = _next_attempt(action, action.plan, error)
+        following, passed = _next_attempt(action, action.plan, error)
         if following is not None:
             return following
-    error.attempt_chain = attempt_chain(action, error)
+    error.attempt_chain = [*attempt_chain(action, error), *passed]
     return Raise(error)
 
 

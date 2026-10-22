@@ -3,9 +3,16 @@ from types import MappingProxyType
 import pytest
 
 from primagate.core import steps
-from primagate.core.call import NO_DROPS, DropPolicy, first_action, next_action
+from primagate.core.call import (
+    NO_DROPS,
+    DropPolicy,
+    count_attempts,
+    first_action,
+    next_action,
+)
 from primagate.schema import errors
 from primagate.schema.types import (
+    Attempt,
     ChatCompletion,
     ChatCompletionRequest,
     Choice,
@@ -21,6 +28,7 @@ ALL = {"openai": FULL, "anthropic": FULL}
 PRIMARY = ("openai", "gpt-4o")
 FB1 = ("anthropic", "claude-sonnet-5-5")
 FB2 = ("openai", "gpt-4o-mini")
+FB3 = ("anthropic", "claude-haiku-5-5")
 SPARE = Endpoint("https://spare.test/v1")
 POLICY = RetryPolicy(max_retries=1)
 TOOL = {"type": "function", "function": {"name": "f"}}
@@ -151,12 +159,47 @@ def test_a_fallback_that_cannot_take_the_request_is_passed_over() -> None:
     caps = {"openai": FULL, "anthropic": BARE}
     action = _fail(_start(caps=caps, request=_request(tools=[TOOL])), _down())
     assert isinstance(action, steps.Dispatch) and (action.provider, action.request.model) == FB2
-    assert len(action.past) == 1
+    primary, skipped = action.past
+    assert primary.skipped is None and primary.model == "openai/gpt-4o"
+    assert skipped.model == "anthropic/claude-sonnet-5-5" and skipped.dispatches == []
+    assert skipped.skipped is not None
+    assert "anthropic" in skipped.skipped and "tools" in skipped.skipped
+    assert 'drop_params=["tools"]' in skipped.skipped
+    assert count_attempts(action.past) == 1
+
+
+def test_a_skipped_row_is_not_an_attempt_in_the_final_chain() -> None:
+    caps = {"openai": FULL, "anthropic": BARE}
+    action = _fail(_start(caps=caps, request=_request(tools=[TOOL])), _down())
+    assert isinstance(action, steps.Dispatch)
+    done = next_action(action, steps.DispatchOutcome(response=_ok()))
+    assert isinstance(done, steps.Return) and done.response.metadata is not None
+    chain = done.response.metadata.attempt_chain
+    assert [a.model for a in chain] == [
+        "openai/gpt-4o",
+        "anthropic/claude-sonnet-5-5",
+        "openai/gpt-4o-mini",
+    ]
+    assert [a.skipped is None for a in chain] == [True, False, True]
+    assert count_attempts(chain) == 2
 
 
 def test_a_fallback_with_no_adapter_is_passed_over() -> None:
     action = _fail(_start(caps={"openai": FULL}), _down())
     assert isinstance(action, steps.Dispatch) and (action.provider, action.request.model) == FB2
+    skipped = action.past[1]
+    assert skipped.skipped is not None and "No adapter" in skipped.skipped
+
+
+def test_a_fallback_that_would_pass_after_drop_params_is_not_skipped() -> None:
+    caps = {"openai": FULL, "anthropic": BARE}
+    start = _start(
+        caps=caps, request=_request(tools=[TOOL]), policy=DropPolicy(features=frozenset({"tools"}))
+    )
+    nxt = _fail(start, _down())
+    assert isinstance(nxt, steps.Dispatch) and nxt.provider == "anthropic"
+    assert nxt.dropped_params == ("tools",) and nxt.request.tools is None
+    assert all(a.skipped is None for a in nxt.past)
 
 
 def test_when_no_fallback_can_take_the_request_the_error_is_raised() -> None:
@@ -164,7 +207,34 @@ def test_when_no_fallback_can_take_the_request_the_error_is_raised() -> None:
     error = _down()
     result = _fail(_start((FB1,), caps=caps, request=_request(tools=[TOOL])), error)
     assert isinstance(result, steps.Raise) and result.error is error
-    assert len(error.attempt_chain) == 1
+    primary, skipped = error.attempt_chain
+    assert primary.skipped is None and skipped.skipped is not None
+    assert count_attempts(error.attempt_chain) == 1
+
+
+def test_every_remaining_fallback_that_is_passed_over_leaves_a_row() -> None:
+    caps = {"openai": FULL, "anthropic": BARE}
+    start = _start((FB1, FB3), caps=caps, request=_request(tools=[TOOL]))
+    error = _down()
+    assert isinstance(_fail(start, error), steps.Raise)
+    assert [a.skipped is None for a in error.attempt_chain] == [True, False, False]
+    assert [a.model for a in error.attempt_chain][1:] == [
+        "anthropic/claude-sonnet-5-5",
+        "anthropic/claude-haiku-5-5",
+    ]
+
+
+def test_the_primary_that_cannot_take_the_request_raises_with_an_empty_chain() -> None:
+    caps = {"openai": BARE, "anthropic": FULL}
+    result = first_action(_request(tools=[TOOL]), caps, NO_DROPS, None, POLICY, _lists((FB1,)))
+    assert isinstance(result, steps.Raise)
+    assert isinstance(result.error, errors.UnsupportedParamsError)
+    assert result.error.attempt_chain == []
+
+
+def test_count_attempts_ignores_skipped_rows() -> None:
+    chain = [Attempt("a/x", [DispatchRecord("a", 0)]), Attempt("b/y", [], skipped="why")]
+    assert count_attempts(chain) == 1 and count_attempts([]) == 0
 
 
 def test_drop_params_are_applied_against_each_fallbacks_own_provider() -> None:
@@ -183,6 +253,7 @@ def test_drop_params_are_applied_against_each_fallbacks_own_provider() -> None:
         "openai/gpt-4o",
         "anthropic/claude-sonnet-5-5",
     ]
+    assert all(a.skipped is None for a in done.response.metadata.attempt_chain)
 
 
 def test_no_fallbacks_behaves_as_before() -> None:
@@ -195,3 +266,15 @@ def test_no_fallbacks_behaves_as_before() -> None:
 def test_the_primary_is_never_repeated_as_its_own_fallback() -> None:
     result = _fail(_start((PRIMARY, FB1)), _down())
     assert isinstance(result, steps.Dispatch) and result.provider == "anthropic"
+
+
+def test_a_skipped_row_stays_in_place_when_a_later_fallback_also_fails() -> None:
+    caps = {"openai": FULL, "anthropic": BARE}
+    start = _start((FB1, FB2), caps=caps, request=_request(tools=[TOOL]))
+    second = _fail(start, _down())
+    assert isinstance(second, steps.Dispatch) and second.request.model == "gpt-4o-mini"
+    for last in (_down(), errors.BadRequestError("bad", status_code=400)):
+        result = _fail(second, last)
+        assert isinstance(result, steps.Raise)
+        assert [a.skipped is None for a in last.attempt_chain] == [True, False, True]
+        assert last.attempt_chain[1].model == "anthropic/claude-sonnet-5-5"

@@ -108,3 +108,16 @@ def test_metadata_is_omitted_until_the_core_fills_it() -> None:
         id="c", created=1, model="m", choices=[choice], metadata=Metadata(dropped_params=["tools"])
     )
     assert named.to_dict()["metadata"] == {"dropped_params": ["tools"], "attempt_chain": []}
+
+
+def test_a_skipped_row_serializes_its_reason_and_a_normal_row_does_not() -> None:
+    from primagate.schema.types import Attempt, DispatchRecord
+
+    real = Attempt("openai/gpt-4o", [DispatchRecord("openai", 0)])
+    skipped = Attempt("anthropic/claude", [], skipped="no tools")
+    assert "skipped" not in real.to_dict()
+    assert skipped.to_dict() == {
+        "model": "anthropic/claude",
+        "dispatches": [],
+        "skipped": "no tools",
+    }

@@ -109,10 +109,15 @@ class DispatchRecord(_Serializable):
 
 @dataclass
 class Attempt(_Serializable):
-    """One candidate model run to completion or failure, with every dispatch it took."""
+    """One candidate model run to completion or failure, with every dispatch it took.
+
+    A row with `skipped` set is a candidate that could not take the request: it was never
+    dispatched, so it is not an Attempt, and `skipped` holds the reason.
+    """
 
     model: str
     dispatches: list[DispatchRecord]
+    skipped: str | None = None
 
 
 @dataclass
