@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import Self
+from typing import Any, Self
 
 from primagate.schema.types import Attempt
 
@@ -78,3 +78,37 @@ class UnsupportedParamsError(PrimaGateError):
 
 class ImageFetchError(PrimaGateError):
     pass
+
+
+class AttemptsExhaustedError(PrimaGateError):
+    """Every Attempt failed (or none that could be made was left), so the chain is the story.
+
+    `attempts` are the models that were actually dispatched, in order; `attempt_chain` also has
+    the candidates passed over. `last_error` is the error that ended the chain and is also the
+    `__cause__`, so tracebacks show it.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempt_chain: list[Attempt],
+        last_error: PrimaGateError,
+    ) -> None:
+        super().__init__(
+            message, llm_provider=last_error.llm_provider, status_code=last_error.status_code
+        )
+        self.attempt_chain = attempt_chain
+        self.attempts = [row for row in attempt_chain if row.skipped is None]
+        self.last_error = last_error
+        self.__cause__ = last_error
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Exception rebuilds from `args`, which would drop the keyword-only fields.
+        return (_rebuild_exhausted, (self.message, self.attempt_chain, self.last_error))
+
+
+def _rebuild_exhausted(
+    message: str, attempt_chain: list[Attempt], last_error: PrimaGateError
+) -> AttemptsExhaustedError:
+    return AttemptsExhaustedError(message, attempt_chain=attempt_chain, last_error=last_error)

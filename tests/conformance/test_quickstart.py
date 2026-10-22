@@ -140,3 +140,29 @@ def test_the_error_sample_prints_the_dropped_feature(
     assert calls[0].url.host == "api.anthropic.com"
     assert "image_url" not in calls[0].content.decode()
     assert "Dropped: ['image']" in capsys.readouterr().out
+
+
+def test_readme_documents_failure_handling() -> None:
+    for term in ("AttemptsExhaustedError", "attempt_chain", "last_error", "skipped"):
+        assert term in README, term
+    sample = next(s for s in SAMPLES if "AttemptsExhaustedError" in s)
+    # `d.error.type` in the sample is a dispatch row's error, not an attribute of the exception.
+    sample_attributes = set(re.findall(r"(?<![\w.])error\.(\w+)", sample))
+    instance = errors.AttemptsExhaustedError(
+        "m", attempt_chain=[], last_error=errors.PrimaGateError("x")
+    )
+    assert sample_attributes and all(hasattr(instance, a) for a in sample_attributes)
+
+
+def test_the_readme_groups_match_how_errors_are_classified() -> None:
+    from primagate.core.classify import Fate, classify
+
+    block = re.search(r"^- `Timeout`.*?(?=\n\n)", README, re.S | re.M)
+    assert block
+    groups = [g for g in block.group(0).removeprefix("- ").split("\n- ") if g.strip()]
+    assert len(groups) == 3
+    for group, fate in zip(groups, (Fate.RETRY, Fate.ADVANCE, Fate.RAISE), strict=True):
+        names = re.findall(r"`(\w+(?:Error|Timeout))`|`(Timeout)`", group)
+        assert names
+        for name in {n for pair in names for n in pair if n}:
+            assert classify(getattr(errors, name)("x")) is fate, name

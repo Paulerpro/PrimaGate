@@ -130,10 +130,15 @@ def test_a_raise_error_ends_the_chain(call: Caller, failing: str) -> None:
     openai = [_status(400)] if failing == "primary" else [_status(503)]
     anthropic = [_status(400)] if failing == "fallback" else [_answer]
     run = Run({OPENAI: openai, ANTHROPIC: anthropic}, **_fallbacks(CLAUDE, MINI))
-    with pytest.raises(errors.BadRequestError) as raised:
+    with pytest.raises(errors.PrimaGateError) as raised:
         call(run.gate, model=GPT, messages=MSGS)
     assert _models(run) == ([GPT] if failing == "primary" else [GPT, CLAUDE])
     assert len(raised.value.attempt_chain) == len(run.sent)
+    if failing == "primary":
+        assert type(raised.value) is errors.BadRequestError
+    else:
+        assert isinstance(raised.value, errors.AttemptsExhaustedError)
+        assert type(raised.value.last_error) is errors.BadRequestError
 
 
 def test_an_advance_error_moves_to_the_fallback_without_a_delay(
@@ -146,7 +151,7 @@ def test_an_advance_error_moves_to_the_fallback_without_a_delay(
 
 @pytest.mark.usefixtures("delays")
 @pytest.mark.parametrize("provider", MODELS)
-def test_when_everything_fails_the_last_error_is_raised_with_every_attempt(
+def test_when_everything_fails_the_aggregate_error_holds_every_attempt(
     call: Caller, provider: str
 ) -> None:
     other = "anthropic" if provider == "openai" else "openai"
@@ -154,8 +159,9 @@ def test_when_everything_fails_the_last_error_is_raised_with_every_attempt(
         {PRIMARY[provider]: [_status(503)], PRIMARY[other]: [_status(429)]},
         **_fallbacks(MODELS[other]),
     )
-    with pytest.raises(errors.RateLimitError) as raised:
+    with pytest.raises(errors.AttemptsExhaustedError) as raised:
         call(run.gate, model=MODELS[provider], messages=MSGS)
+    assert isinstance(raised.value.last_error, errors.RateLimitError)
     chain = raised.value.attempt_chain
     assert [a.model.split("/")[0] for a in chain] == [provider, other]
     assert chain[0].dispatches[0].error is not None
@@ -180,14 +186,15 @@ def test_a_fallback_that_lacks_a_needed_feature_is_passed_over(
     assert "skipped" not in wire[0] and wire[1]["skipped"] == reason
 
 
-def test_every_incapable_fallback_leaves_a_row_and_the_primarys_error_is_raised(
+def test_every_incapable_fallback_leaves_a_row_in_the_aggregate_error(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
     run = Run({OPENAI: [_status(503)]}, **_fallbacks(CLAUDE))
-    with pytest.raises(errors.ServiceUnavailableError) as raised:
+    with pytest.raises(errors.AttemptsExhaustedError) as raised:
         call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
     assert len(run.sent) == 1
+    assert isinstance(raised.value.last_error, errors.ServiceUnavailableError)
     chain = raised.value.attempt_chain
     assert [a.skipped is None for a in chain] == [True, False]
 
@@ -223,7 +230,7 @@ def test_a_skipped_row_reaches_a_stream_that_fails_to_open(
     monkeypatch.setattr(AnthropicAdapter, "capabilities", lambda self: Capabilities())
     run = Run({OPENAI: [_status(503)]}, **_fallbacks(CLAUDE))
     result = stream_call(run.gate, model=GPT, messages=MSGS, tools=[TOOL])
-    assert isinstance(result.call_error, errors.ServiceUnavailableError)
+    assert isinstance(result.call_error, errors.AttemptsExhaustedError)
     assert [a.skipped is None for a in result.call_error.attempt_chain] == [True, False]
 
 

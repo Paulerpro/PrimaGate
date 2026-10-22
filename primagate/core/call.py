@@ -21,7 +21,12 @@ from primagate.core.steps import (
     Sleep,
     SleepOutcome,
 )
-from primagate.schema.errors import BadRequestError, PrimaGateError, UnsupportedParamsError
+from primagate.schema.errors import (
+    AttemptsExhaustedError,
+    BadRequestError,
+    PrimaGateError,
+    UnsupportedParamsError,
+)
 from primagate.schema.types import (
     Attempt,
     ChatCompletionRequest,
@@ -260,6 +265,16 @@ def _next_attempt(
     return None, skipped
 
 
+def _exhausted(chain: list[Attempt], last: PrimaGateError) -> AttemptsExhaustedError:
+    tried = [row.model for row in chain if row.skipped is None]
+    passed = [row.model for row in chain if row.skipped is not None]
+    parts = [f"{count_attempts(chain)} attempt(s) failed ({', '.join(tried)})"]
+    if passed:
+        parts.append(f"skipped: {', '.join(passed)}")
+    parts.append(f"last error: {type(last).__name__}: {last.message}")
+    return AttemptsExhaustedError("; ".join(parts), attempt_chain=chain, last_error=last)
+
+
 def _after_failure(action: Dispatch, error: PrimaGateError) -> Action:
     fate = classify(error)
     route = action.route
@@ -280,7 +295,12 @@ def _after_failure(action: Dispatch, error: PrimaGateError) -> Action:
         following, passed = _next_attempt(action, action.plan, error)
         if following is not None:
             return following
-    error.attempt_chain = [*attempt_chain(action, error), *passed]
+    chain = [*attempt_chain(action, error), *passed]
+    error.attempt_chain = chain
+    # One row is a single Attempt's story and the mapped error tells it; more than one row,
+    # whether Attempts or candidates passed over, needs the whole chain to be understood.
+    if len(chain) > 1:
+        return Raise(_exhausted(chain, error))
     return Raise(error)
 
 

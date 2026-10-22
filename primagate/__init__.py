@@ -2,6 +2,7 @@ from primagate.client import PrimaGate, acompletion, completion
 from primagate.schema.errors import (
     APIConnectionError,
     APIError,
+    AttemptsExhaustedError,
     AuthenticationError,
     BadRequestError,
     ContentPolicyViolationError,
@@ -24,6 +25,7 @@ drop_params: bool | list[str] | None = None
 __all__ = [
     "APIConnectionError",
     "APIError",
+    "AttemptsExhaustedError",
     "AuthenticationError",
     "BadRequestError",
     "ContentPolicyViolationError",

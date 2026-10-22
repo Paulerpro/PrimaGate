@@ -121,6 +121,63 @@ same for the shared default instance used by `completion` and `acompletion`.
 Every error PrimaGate raises derives from `PrimaGateError`, and you can import each one from
 `primagate`: for example `RateLimitError`, `AuthenticationError`, `Timeout` and `BadRequestError`.
 
+### 7. Handle failures
+
+When a call fails, PrimaGate raises one of its own errors. They all derive from `PrimaGateError`,
+and the class tells you why:
+
+- `Timeout`, `RateLimitError`, `ServiceUnavailableError`, `APIError` and `APIConnectionError`
+  are temporary: the provider or the network let you down.
+- `AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `ContextWindowExceededError`
+  and `ContentPolicyViolationError` mean this model or key cannot serve the request, though
+  another one might.
+- `BadRequestError`, `UnsupportedParamsError` and `ImageFetchError` mean the request itself is
+  wrong, so trying elsewhere would not help.
+
+A plain call makes one request. If you declare redundant endpoints (`provider_routing`) or
+fallback models (`fallbacks`, `default_fallbacks`), PrimaGate uses these classes to decide what
+comes next: temporary errors are retried and then moved on, errors of the second kind move on
+to the next endpoint or fallback, and errors of the third kind stop at once.
+
+Every response and every error records what happened in `attempt_chain`: one row per model that
+was tried, in order, each listing its dispatches (the `endpoint`, the number of `retries` and the
+`error` it ended with). A row with `skipped` set is a fallback that was passed over without being
+sent, because it could not do what the request needs; `skipped` holds the reason, and such a row
+is not an attempt.
+
+When more than one model was tried, or a failed attempt was followed only by fallbacks that were
+passed over, PrimaGate raises one `AttemptsExhaustedError` instead of only the last error.
+`error.attempts` lists the models that were really tried, `error.attempt_chain` also shows the
+ones passed over, and `error.last_error` is the error that ended the chain. A single model that
+fails raises its own error, with `attempt_chain` attached. `AttemptsExhaustedError` copies
+`status_code` and `llm_provider` from `last_error`. If you caught a specific error such as
+`RateLimitError` around a call that has fallbacks, catch `AttemptsExhaustedError` as well and
+look at `error.last_error`.
+
+```python
+from primagate import AttemptsExhaustedError, PrimaGateError, completion
+
+try:
+    response = completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Say hello in five words."}],
+    )
+except AttemptsExhaustedError as error:
+    print("Every attempt failed. The last error was:", error.last_error)
+    for attempt in error.attempts:
+        print(attempt.model, [d.error.type for d in attempt.dispatches if d.error])
+except PrimaGateError as error:
+    print("The call failed:", error)
+    print(error.attempt_chain)
+else:
+    print(response.choices[0].message.content)
+    for attempt in response.metadata.attempt_chain:
+        print(attempt.model, [d.endpoint for d in attempt.dispatches])
+```
+
+A stream that fails after its first chunk has already reached you ends with the plain error, not
+`AttemptsExhaustedError`, and carries `attempt_chain` too.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

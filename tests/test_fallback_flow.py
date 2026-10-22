@@ -86,13 +86,15 @@ def test_a_failed_attempt_starts_the_next_fallback_as_its_own_attempt() -> None:
     ]
 
 
-def test_fallbacks_are_tried_in_order_and_the_last_error_is_raised_with_every_attempt() -> None:
+def test_fallbacks_are_tried_in_order_and_the_aggregate_error_lists_every_attempt() -> None:
     second = _fail(_start(), _down())
     last = errors.RateLimitError("slow", status_code=429)
     third = _fail(second, errors.Timeout("t"))
     assert isinstance(third, steps.Dispatch) and (third.provider, third.request.model) == FB2
     result = _fail(third, last)
-    assert isinstance(result, steps.Raise) and result.error is last
+    assert isinstance(result, steps.Raise)
+    assert isinstance(result.error, errors.AttemptsExhaustedError)
+    assert result.error.last_error is last
     assert [a.model for a in last.attempt_chain] == [
         "openai/gpt-4o",
         "anthropic/claude-sonnet-5-5",
@@ -118,8 +120,13 @@ def test_a_raise_error_ends_the_chain(which: str) -> None:
         action = _fail(action, _down())
     bad = errors.BadRequestError("bad", status_code=400)
     result = _fail(action, bad)
-    assert isinstance(result, steps.Raise) and result.error is bad
+    assert isinstance(result, steps.Raise)
     assert len(bad.attempt_chain) == (1 if which == "primary" else 2)
+    if which == "primary":
+        assert result.error is bad
+    else:
+        assert isinstance(result.error, errors.AttemptsExhaustedError)
+        assert result.error.last_error is bad
 
 
 def test_the_primarys_routing_is_exhausted_before_the_first_fallback() -> None:
@@ -202,11 +209,13 @@ def test_a_fallback_that_would_pass_after_drop_params_is_not_skipped() -> None:
     assert all(a.skipped is None for a in nxt.past)
 
 
-def test_when_no_fallback_can_take_the_request_the_error_is_raised() -> None:
+def test_when_no_fallback_can_take_the_request_the_aggregate_error_is_raised() -> None:
     caps = {"openai": FULL, "anthropic": BARE}
     error = _down()
     result = _fail(_start((FB1,), caps=caps, request=_request(tools=[TOOL])), error)
-    assert isinstance(result, steps.Raise) and result.error is error
+    assert isinstance(result, steps.Raise)
+    assert isinstance(result.error, errors.AttemptsExhaustedError)
+    assert result.error.last_error is error
     primary, skipped = error.attempt_chain
     assert primary.skipped is None and skipped.skipped is not None
     assert count_attempts(error.attempt_chain) == 1
