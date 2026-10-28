@@ -191,3 +191,19 @@ def test_the_events_sample_prints_one_id_and_the_catalog_names(
     shown = [line.split() for line in lines if line.startswith("req-")]
     assert [name for _, name in shown] == ["dispatch_started", "call_succeeded"]
     assert len({request_id for request_id, _ in shown}) == 1
+
+
+def test_readme_explains_payload_retention_and_its_limits() -> None:
+    assert "payload_retention" in README
+    for phrase in ("never appear in events", "scheme, host, port", "Analyzer"):
+        assert phrase in README, phrase
+
+
+def test_the_privacy_sample_prints_what_was_sent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "payload_retention" in s)
+    _run(sample, monkeypatch)
+    assert "Sent: ({'role': 'user', 'content': 'Say hello in five words.'},)" in (
+        capsys.readouterr().out
+    )

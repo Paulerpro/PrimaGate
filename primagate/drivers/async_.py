@@ -120,6 +120,7 @@ class AsyncDriver:
         retry: RetryPolicy = DEFAULT_RETRY,
         fallbacks: Fallbacks = NO_FALLBACKS,
         event_handler: EventHandler | None = None,
+        payload_retention: bool = False,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -128,6 +129,7 @@ class AsyncDriver:
         self._retry = retry
         self._fallbacks = fallbacks
         self._event_handler = event_handler
+        self._payload_retention = payload_retention
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -142,6 +144,7 @@ class AsyncDriver:
         retry: RetryPolicy = DEFAULT_RETRY,
         fallbacks: Fallbacks = NO_FALLBACKS,
         event_handler: EventHandler | None = None,
+        payload_retention: bool = False,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -151,6 +154,7 @@ class AsyncDriver:
             retry=retry,
             fallbacks=fallbacks,
             event_handler=event_handler,
+            payload_retention=payload_retention,
         )
 
     async def aclose(self) -> None:
@@ -164,6 +168,7 @@ class AsyncDriver:
             self._routing,
             self._retry,
             self._fallbacks,
+            self._payload_retention,
         )
 
     async def run(

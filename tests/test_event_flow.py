@@ -199,3 +199,51 @@ def test_an_outcome_that_does_not_answer_the_action_is_refused() -> None:
     assert isinstance(action, steps.Emit)
     bad = advance(action, steps.SleepOutcome())
     assert isinstance(bad, steps.Raise)
+
+
+def test_payload_retention_is_off_unless_asked_and_core_then_builds_no_content() -> None:
+    seen, _ = _drive(start(_request(), CAPS), [steps.DispatchOutcome(response=_ok())])
+    started, done = seen
+    assert isinstance(started, events.DispatchStarted) and started.messages is None
+    assert isinstance(done, events.CallSucceeded) and done.reply_messages is None
+
+
+def test_retention_carries_the_request_and_the_reply_and_survives_a_fallback() -> None:
+    first = start(_request(), CAPS, fallbacks=FALLBACKS, retry=POLICY, payload_retention=True)
+    script = [_fail(503, errors.ServiceUnavailableError), steps.DispatchOutcome(response=_ok())]
+    seen, _ = _drive(first, script)
+    started = [e for e in seen if isinstance(e, events.DispatchStarted)]
+    assert len(started) == 2
+    assert all(s.messages == ({"role": "user", "content": "hi"},) for s in started)
+    done = seen[-1]
+    assert isinstance(done, events.CallSucceeded)
+    assert done.reply_messages == ({"role": "assistant", "content": "yo"},)
+
+
+def test_error_text_stays_out_of_events_even_with_retention() -> None:
+    bad = steps.DispatchOutcome(error=errors.BadRequestError("echoed hi", status_code=400))
+    seen, _ = _drive(start(_request(), CAPS, payload_retention=True), [bad])
+    failures = [e for e in seen if not isinstance(e, events.DispatchStarted)]
+    assert "echoed" not in repr(failures)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "shown"),
+    [
+        ("https://u:pw@b.test/v1?api-key=K#f", "https://b.test/v1"),
+        ("https://b.test:8443/v1", "https://b.test:8443/v1"),
+        ("http://b.test", "http://b.test"),
+        ("user:pw@b.test/v1", "openai"),
+        ("b.test/v1?k=K", "openai"),
+        ("http://[bad", "openai"),
+        ("ftp://u:pw@b.test/x", "openai"),
+        ("https://", "openai"),
+    ],
+)
+def test_the_endpoint_in_an_event_never_carries_credentials(base_url: str, shown: str) -> None:
+    routing = {("openai", "gpt-4o"): (Endpoint(base_url),)}
+    first = start(_request(), CAPS, routing=routing, retry=RetryPolicy(0, 0.5, 1.0))
+    script = [_fail(503, errors.ServiceUnavailableError), steps.DispatchOutcome(response=_ok())]
+    seen, _ = _drive(first, script)
+    started = [e for e in seen if isinstance(e, events.DispatchStarted)]
+    assert [s.endpoint for s in started] == ["openai", shown]

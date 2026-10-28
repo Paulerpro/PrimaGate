@@ -119,6 +119,7 @@ class SyncDriver:
         retry: RetryPolicy = DEFAULT_RETRY,
         fallbacks: Fallbacks = NO_FALLBACKS,
         event_handler: EventHandler | None = None,
+        payload_retention: bool = False,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -127,6 +128,7 @@ class SyncDriver:
         self._retry = retry
         self._fallbacks = fallbacks
         self._event_handler = event_handler
+        self._payload_retention = payload_retention
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -141,6 +143,7 @@ class SyncDriver:
         retry: RetryPolicy = DEFAULT_RETRY,
         fallbacks: Fallbacks = NO_FALLBACKS,
         event_handler: EventHandler | None = None,
+        payload_retention: bool = False,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -150,6 +153,7 @@ class SyncDriver:
             retry=retry,
             fallbacks=fallbacks,
             event_handler=event_handler,
+            payload_retention=payload_retention,
         )
 
     def close(self) -> None:
@@ -163,6 +167,7 @@ class SyncDriver:
             self._routing,
             self._retry,
             self._fallbacks,
+            self._payload_retention,
         )
 
     def run(self, request: ChatCompletionRequest, drop_params: object = None) -> ChatCompletion:

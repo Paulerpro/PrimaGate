@@ -219,6 +219,47 @@ the one exception is cancellation, which always propagates. A stream that opens
 successfully reports its start but not `call_succeeded`, and a failure after its first chunk
 is not reported.
 
+### 9. Keep conversations out of your logs
+
+By default, events and log lines say what PrimaGate did and never what was said: no message
+text goes into them. The `payload_retention` setting is the only switch for that. When you set it
+to `True`, the messages you sent are added to each `dispatch_started` event (its `messages` field)
+and the messages you got back to `call_succeeded` (its `reply_messages` field), and both are also
+written to the `primagate` logger. A retry or a fallback sends the conversation again, so each
+repeats it. A streamed reply is never retained, because a stream reports no `call_succeeded`.
+
+```python
+from primagate import DispatchStarted, Event, PrimaGate
+
+
+def show(event: Event) -> None:
+    if isinstance(event, DispatchStarted):
+        print("Sent:", event.messages)
+
+
+gate = PrimaGate(payload_retention=True, event_handler=show)
+response = gate.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+What the setting does not change:
+
+- Provider API keys never appear in events, logs, `repr` or error tracebacks, whatever the
+  setting. A key that a provider echoes back in an error message is replaced by `***`.
+- An endpoint shown in an event or in `attempt_chain` is cut down to its scheme, host, port and
+  path, so a key placed in a URL's user info or query string stays out. A URL that cannot be cut
+  down that way is shown as the provider's name.
+- The provider's error text is never put into an event, because providers sometimes repeat your
+  prompt in it. The error you catch still carries that text.
+- The provider's error text also stays in the `attempt_chain` you are given, which holds no
+  message content but is yours to keep private.
+
+Turn `payload_retention` on only where logs and handlers are as private as your users' messages.
+A disclosure about what the Tier Routing Analyzer reads comes with that feature.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

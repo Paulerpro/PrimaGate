@@ -37,6 +37,8 @@ class DispatchStarted(Event):
     model: str
     endpoint: str
     retries: int
+    # The request's messages; set only when the caller opted in to payload retention.
+    messages: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,8 @@ class CallSucceeded(Event):
     model: str
     attempts: int
     dropped_params: tuple[str, ...]
+    # The reply's messages; set only when the caller opted in to payload retention.
+    reply_messages: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)

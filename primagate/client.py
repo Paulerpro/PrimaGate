@@ -79,6 +79,7 @@ class PrimaGate:
         backoff_base: float = DEFAULT_RETRY.backoff_base,
         backoff_max: float = DEFAULT_RETRY.backoff_max,
         event_handler: EventHandler | None = None,
+        payload_retention: bool = False,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -95,7 +96,10 @@ class PrimaGate:
             not callable(event_handler) or inspect.iscoroutinefunction(event_handler)
         ):
             raise BadRequestError("event_handler must be a plain function taking one event")
+        if not isinstance(payload_retention, bool):
+            raise BadRequestError("payload_retention must be True or False")
         self._event_handler = event_handler
+        self._payload_retention = payload_retention
         self._drop_params = drop_params
         self._api_keys = dict(api_keys or {})
         self._base_urls = dict(base_urls or {})
@@ -183,6 +187,7 @@ class PrimaGate:
                     retry=self._retry,
                     fallbacks=self._fallbacks,
                     event_handler=self._event_handler,
+                    payload_retention=self._payload_retention,
                 )
             return self._driver
 
@@ -199,6 +204,7 @@ class PrimaGate:
                     retry=self._retry,
                     fallbacks=self._fallbacks,
                     event_handler=self._event_handler,
+                    payload_retention=self._payload_retention,
                 )
             return self._async_driver
 

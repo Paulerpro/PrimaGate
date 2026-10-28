@@ -64,6 +64,8 @@ class Dispatch:
     plan: Plan | None = None
     # Empty only in core-level tests that build a Dispatch by hand.
     request_id: str = ""
+    # Carried with the call so every event it builds follows the caller's privacy choice.
+    payload_retention: bool = False
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 from primagate.core.classify import Fate, classify
 from primagate.core.fallbacks import fallback_candidates
@@ -203,13 +204,9 @@ def first_action(
     return dataclasses.replace(first, plan=plan)
 
 
-def _label(action: Dispatch) -> str:
-    return action.endpoint.base_url if action.endpoint else action.provider
-
-
 def _record(action: Dispatch, error: PrimaGateError | None = None) -> DispatchRecord:
     info = ErrorInfo(type(error).__name__, error.message, error.status_code) if error else None
-    return DispatchRecord(_label(action), action.retries, info)
+    return DispatchRecord(_shown(action), action.retries, info)
 
 
 def attempt_chain(action: Dispatch, error: PrimaGateError | None = None) -> list[Attempt]:
@@ -264,6 +261,7 @@ def _next_attempt(
         following = dataclasses.replace(
             built,
             request_id=action.request_id,
+            payload_retention=action.payload_retention,
             past=(*chain, *skipped),
             plan=dataclasses.replace(plan, later=rest) if rest else None,
         )
@@ -339,13 +337,20 @@ def start(
     routing: Mapping[tuple[str, str], tuple[Endpoint, ...]] | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
     fallbacks: Fallbacks = NO_FALLBACKS,
+    payload_retention: bool = False,
 ) -> Action:
-    """The first action of a call: ask for its request id, then announce and begin."""
+    """The first action of a call: ask for its request id, then announce and begin.
+
+    Content reaches an event only when `payload_retention` is true; with false it is never built,
+    so no later stage can leak it.
+    """
 
     def begin(request_id: str) -> Action:
         first = first_action(request, capabilities, policy, routing, retry, fallbacks)
         if isinstance(first, Dispatch):
-            first = dataclasses.replace(first, request_id=request_id)
+            first = dataclasses.replace(
+                first, request_id=request_id, payload_retention=payload_retention
+            )
             return Emit((_started(first),), first)
         if isinstance(first, Raise):
             return Emit((_call_failed(request_id, first.error),), first)
@@ -377,8 +382,31 @@ def _model(action: Dispatch) -> str:
     return f"{action.provider}/{action.request.model}"
 
 
+def _shown(action: Dispatch) -> str:
+    """The endpoint as events, logs and the attempt chain show it.
+
+    A base URL may carry a key in its user info or query string, so only scheme, host, port and
+    path are kept. A URL that cannot be cut down reliably is not shown at all.
+    """
+    if action.endpoint is None:
+        return action.provider
+    try:
+        parts = urlsplit(action.endpoint.base_url)
+    except ValueError:
+        return action.provider
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return action.provider
+    host = parts.netloc.rpartition("@")[2]
+    return f"{parts.scheme}://{host}{parts.path}"
+
+
 def _started(action: Dispatch) -> events.DispatchStarted:
-    return events.DispatchStarted(action.request_id, _model(action), _label(action), action.retries)
+    messages = (
+        tuple(m.to_dict() for m in action.request.messages) if action.payload_retention else None
+    )
+    return events.DispatchStarted(
+        action.request_id, _model(action), _shown(action), action.retries, messages
+    )
 
 
 def _call_failed(request_id: str, error: PrimaGateError) -> events.CallFailed:
@@ -393,12 +421,12 @@ def _announce(action: Action, outcome: Outcome, following: Action) -> tuple[even
         if outcome.error is not None:
             return _after_dispatch_failure(action, outcome.error, following)
         if isinstance(following, Return):
-            return (_call_succeeded(rid, following),)
+            return (_call_succeeded(action, following),)
     if isinstance(action, Random) and isinstance(following, Sleep):
         resume = following.resume
         return (
             events.RetryScheduled(
-                rid, _model(resume), _label(resume), resume.retries, following.seconds
+                rid, _model(resume), _shown(resume), resume.retries, following.seconds
             ),
         )
     if isinstance(action, Sleep) and isinstance(following, Dispatch):
@@ -406,11 +434,17 @@ def _announce(action: Action, outcome: Outcome, following: Action) -> tuple[even
     return ()
 
 
-def _call_succeeded(request_id: str, done: Return) -> events.CallSucceeded:
-    chain = done.response.metadata.attempt_chain if done.response.metadata else []
-    dropped = tuple(done.response.metadata.dropped_params) if done.response.metadata else ()
+def _call_succeeded(action: Dispatch, done: Return) -> events.CallSucceeded:
+    metadata = done.response.metadata
+    chain = metadata.attempt_chain if metadata else []
+    dropped = tuple(metadata.dropped_params) if metadata else ()
     model = next((row.model for row in reversed(chain) if row.skipped is None), "")
-    return events.CallSucceeded(request_id, model, count_attempts(chain), dropped)
+    reply = (
+        tuple(c.message.to_dict() for c in done.response.choices)
+        if action.payload_retention
+        else None
+    )
+    return events.CallSucceeded(action.request_id, model, count_attempts(chain), dropped, reply)
 
 
 def _after_dispatch_failure(
@@ -431,7 +465,7 @@ def _after_dispatch_failure(
         skipped = error.attempt_chain[before:]
     announced: list[events.Event] = [
         events.DispatchFailed(
-            rid, _model(action), _label(action), type(error).__name__, error.status_code, next_step
+            rid, _model(action), _shown(action), type(error).__name__, error.status_code, next_step
         )
     ]
     announced += [events.AttemptSkipped(rid, row.model, row.skipped or "") for row in skipped]
