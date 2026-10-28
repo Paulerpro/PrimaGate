@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import dataclasses
+import logging
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Final
 
 from primagate.core import steps
@@ -10,8 +13,38 @@ from primagate.core.call import attempt_chain
 from primagate.core.ports import Adapter
 from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
+from primagate.schema.events import Event
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, Metadata
 from primagate.schema.wire import ProviderRequest, ProviderSettings, RawEvent, RawOutcome
+
+logger = logging.getLogger("primagate")
+
+EventHandler = Callable[[Event], None]
+
+
+def deliver(events: tuple[Event, ...], handler: EventHandler | None) -> None:
+    """Write each event to the logger, then give it to the handler, exactly once.
+
+    The logger goes first so a faulty handler cannot hide what happened. A handler's own
+    exception is logged and dropped because observing a call must never change it; only
+    `BaseException`s that are not `Exception`s (cancellation, interrupts) get through.
+    """
+    for event in events:
+        stamped = dataclasses.replace(
+            event, timestamp=datetime.now(UTC).isoformat(timespec="milliseconds")
+        )
+        fields = " ".join(
+            f"{k}={v}"
+            for k, v in stamped.to_dict().items()
+            if k not in ("event_type", "request_id")
+        )
+        logger.info("%s request_id=%s %s", stamped.event_type, stamped.request_id, fields)
+        if handler is None:
+            continue
+        try:
+            handler(stamped)
+        except Exception:
+            logger.exception("event handler failed on %s", stamped.event_type)
 
 
 @dataclass(frozen=True)

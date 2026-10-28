@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from primagate.schema.errors import PrimaGateError
+from primagate.schema.events import Event
 from primagate.schema.types import (
     Attempt,
     ChatCompletion,
@@ -61,6 +62,8 @@ class Dispatch:
     past: tuple[Attempt, ...] = ()
     # None when no fallback remains.
     plan: Plan | None = None
+    # Empty only in core-level tests that build a Dispatch by hand.
+    request_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,10 +89,25 @@ class Sleep:
     resume: Dispatch
 
 
-Action = Dispatch | Return | Raise | Random | Sleep
+@dataclass(frozen=True)
+class NewId:
+    """Ask the driver for this call's request id; `resume` turns it into the next action."""
+
+    resume: Callable[[str], Action]
+
+
+@dataclass(frozen=True)
+class Emit:
+    """Ask the driver to deliver events to the handler and the logger, then go on."""
+
+    events: tuple[Event, ...]
+    resume: Action
+
+
+Action = Dispatch | Return | Raise | Random | Sleep | NewId | Emit
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
-ACTION_TYPES: tuple[type[Action], ...] = (Dispatch, Return, Raise, Random, Sleep)
+ACTION_TYPES: tuple[type[Action], ...] = (Dispatch, Return, Raise, Random, Sleep, NewId, Emit)
 
 
 @dataclass(frozen=True)
@@ -111,4 +129,14 @@ class SleepOutcome:
     pass
 
 
-Outcome = DispatchOutcome | RandomOutcome | SleepOutcome
+@dataclass(frozen=True)
+class IdOutcome:
+    value: str
+
+
+@dataclass(frozen=True)
+class EmitOutcome:
+    pass
+
+
+Outcome = DispatchOutcome | RandomOutcome | SleepOutcome | IdOutcome | EmitOutcome

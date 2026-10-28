@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Any, ClassVar, Self
@@ -9,14 +10,16 @@ from typing import Any, ClassVar, Self
 import httpx2
 
 from primagate.core import steps
-from primagate.core.call import first_action, next_action, parse_drop_params
+from primagate.core.call import advance, parse_drop_params, start
 from primagate.core.ports import Adapter
 from primagate.drivers._shared import (
     END,
+    EventHandler,
     Finished,
     Step,
     StreamState,
     credentials,
+    deliver,
     prepare,
     settle,
 )
@@ -116,6 +119,7 @@ class AsyncDriver:
         routing: ProviderRouting | None = None,
         retry: RetryPolicy = DEFAULT_RETRY,
         fallbacks: Fallbacks = NO_FALLBACKS,
+        event_handler: EventHandler | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -123,6 +127,7 @@ class AsyncDriver:
         self._routing = routing
         self._retry = retry
         self._fallbacks = fallbacks
+        self._event_handler = event_handler
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -136,6 +141,7 @@ class AsyncDriver:
         routing: ProviderRouting | None = None,
         retry: RetryPolicy = DEFAULT_RETRY,
         fallbacks: Fallbacks = NO_FALLBACKS,
+        event_handler: EventHandler | None = None,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -144,13 +150,14 @@ class AsyncDriver:
             routing=routing,
             retry=retry,
             fallbacks=fallbacks,
+            event_handler=event_handler,
         )
 
     async def aclose(self) -> None:
         await self._transport.aclose()
 
     def _first(self, request: ChatCompletionRequest, drop_params: object) -> steps.Action:
-        return first_action(
+        return start(
             request,
             self._capabilities,
             parse_drop_params(drop_params),
@@ -167,7 +174,7 @@ class AsyncDriver:
             step = await self.perform(action)
             if isinstance(step, Finished):
                 return step.response
-            action = next_action(action, step)
+            action = advance(action, step)
 
     async def stream(
         self, request: ChatCompletionRequest, drop_params: object = None
@@ -184,7 +191,7 @@ class AsyncDriver:
                 if isinstance(performed, Finished):
                     raise PrimaGateError("Stream request produced no dispatch")
                 step = performed
-            action = next_action(action, step)
+            action = advance(action, step)
 
     async def _open(self, action: steps.Dispatch) -> AsyncStream | steps.DispatchOutcome:
         """Open a stream and read to its first chunk; failing before that can be retried."""
@@ -219,6 +226,14 @@ class AsyncDriver:
         await asyncio.sleep(action.seconds)
         return steps.SleepOutcome()
 
+    async def _new_id(self, action: steps.NewId) -> Step:
+        # Prefixed so a call's ids never collide with background-preparation ids.
+        return steps.IdOutcome(f"req-{uuid.uuid4().hex}")
+
+    async def _emit(self, action: steps.Emit) -> Step:
+        deliver(action.events, self._event_handler)
+        return steps.EmitOutcome()
+
     async def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -231,4 +246,6 @@ class AsyncDriver:
         steps.Raise: _raise,
         steps.Random: _random,
         steps.Sleep: _sleep,
+        steps.NewId: _new_id,
+        steps.Emit: _emit,
     }

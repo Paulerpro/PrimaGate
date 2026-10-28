@@ -8,7 +8,7 @@ import pytest
 import primagate
 import primagate.client as client_module
 from primagate import PrimaGate
-from primagate.schema import errors
+from primagate.schema import errors, events
 
 README = (Path(__file__).parents[2] / "README.md").read_text(encoding="utf-8")
 SAMPLES = re.findall(r"```python\n(.*?)```", README, flags=re.DOTALL)
@@ -51,7 +51,7 @@ def test_every_error_class_is_exported_from_the_package_root() -> None:
     for name in classes:
         assert getattr(primagate, name) is getattr(errors, name), name
     # The root exports the errors and the entry points, nothing else yet.
-    others = {"PrimaGate", "__version__", "acompletion", "completion"}
+    others = {"PrimaGate", "__version__", "acompletion", "completion"} | set(events.EXPORTED)
     assert set(primagate.__all__) == set(classes) | others
 
 
@@ -104,6 +104,14 @@ def _run(sample: str, monkeypatch: pytest.MonkeyPatch) -> list[httpx2.Request]:
     monkeypatch.setattr(primagate, "drop_params", None)
     gate = PrimaGate(transport=httpx2.MockTransport(handle))
     monkeypatch.setattr(client_module, "_default", gate)
+    # A sample that builds its own instance must reach the recorded replies, not the network.
+    original_init = PrimaGate.__init__
+
+    def recorded_init(self: PrimaGate, *args: object, **kwargs: object) -> None:
+        kwargs.setdefault("transport", httpx2.MockTransport(handle))
+        original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PrimaGate, "__init__", recorded_init)
     try:
         exec(compile(sample, "README.md", "exec"), {"__name__": "__main__"})
     finally:
@@ -166,3 +174,20 @@ def test_the_readme_groups_match_how_errors_are_classified() -> None:
         assert names
         for name in {n for pair in names for n in pair if n}:
             assert classify(getattr(errors, name)("x")) is fate, name
+
+
+def test_readme_names_every_event_type_and_the_handler_setting() -> None:
+    assert "event_handler" in README and "`primagate`" in README
+    for event_type in events.EVENT_TYPES:
+        assert f"`{event_type}`" in README, event_type
+
+
+def test_the_events_sample_prints_one_id_and_the_catalog_names(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "event_handler" in s)
+    _run(sample, monkeypatch)
+    lines = capsys.readouterr().out.splitlines()
+    shown = [line.split() for line in lines if line.startswith("req-")]
+    assert [name for _, name in shown] == ["dispatch_started", "call_succeeded"]
+    assert len({request_id for request_id, _ in shown}) == 1

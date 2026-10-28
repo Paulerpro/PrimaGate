@@ -16,6 +16,15 @@ from primagate.schema.errors import (
     Timeout,
     UnsupportedParamsError,
 )
+from primagate.schema.events import (
+    AttemptSkipped,
+    CallFailed,
+    CallSucceeded,
+    DispatchFailed,
+    DispatchStarted,
+    Event,
+    RetryScheduled,
+)
 
 __version__ = "0.1.0"
 
@@ -25,17 +34,24 @@ drop_params: bool | list[str] | None = None
 __all__ = [
     "APIConnectionError",
     "APIError",
+    "AttemptSkipped",
     "AttemptsExhaustedError",
     "AuthenticationError",
     "BadRequestError",
+    "CallFailed",
+    "CallSucceeded",
     "ContentPolicyViolationError",
     "ContextWindowExceededError",
+    "DispatchFailed",
+    "DispatchStarted",
+    "Event",
     "ImageFetchError",
     "NotFoundError",
     "PermissionDeniedError",
     "PrimaGate",
     "PrimaGateError",
     "RateLimitError",
+    "RetryScheduled",
     "ServiceUnavailableError",
     "Timeout",
     "UnsupportedParamsError",

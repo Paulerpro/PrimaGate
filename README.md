@@ -178,6 +178,47 @@ else:
 A stream that fails after its first chunk has already reached you ends with the plain error, not
 `AttemptsExhaustedError`, and carries `attempt_chain` too.
 
+### 8. Watch what PrimaGate does
+
+Every call reports what it does as events. Each event is delivered to the standard logger named
+`primagate` (at `INFO`, which Python hides until you set that level, for example with
+`logging.basicConfig(level=logging.INFO)`) and, if you pass `event_handler`, to your function,
+once each and in order, on the thread that made the call. The handler must be a plain function,
+not `async def`, and it runs inline, so a slow one slows the call:
+
+```python
+from primagate import Event, PrimaGate
+
+
+def show(event: Event) -> None:
+    print(event.request_id, event.event_type)
+
+
+gate = PrimaGate(event_handler=show)
+response = gate.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+All the events of one call share a `request_id` (it starts with `req-`), and each has a UTC
+`timestamp`. The events are:
+
+- `dispatch_started`: a request is about to be sent to a model at an endpoint.
+- `dispatch_failed`: it failed; `next` says what follows: `retry`, `next_endpoint`,
+  `next_attempt` or `raise`.
+- `retry_scheduled`: PrimaGate will wait `delay` seconds and try again.
+- `attempt_skipped`: a fallback was passed over, with the `reason`.
+- `call_succeeded` and `call_failed`: the call is over.
+
+An event says what happened, not what was said: it carries model names, endpoints, error class
+names and status codes, never message text, error text or keys. Your handler must be quick and
+safe to call from several threads. If it raises, PrimaGate logs the traceback and carries on;
+the one exception is cancellation, which always propagates. A stream that opens
+successfully reports its start but not `call_succeeded`, and a failure after its first chunk
+is not reported.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

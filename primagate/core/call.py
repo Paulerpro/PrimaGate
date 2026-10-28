@@ -11,6 +11,10 @@ from primagate.core.steps import (
     Dispatch,
     DispatchOutcome,
     DropPolicy,
+    Emit,
+    EmitOutcome,
+    IdOutcome,
+    NewId,
     Outcome,
     Plan,
     Raise,
@@ -21,6 +25,7 @@ from primagate.core.steps import (
     Sleep,
     SleepOutcome,
 )
+from primagate.schema import events
 from primagate.schema.errors import (
     AttemptsExhaustedError,
     BadRequestError,
@@ -258,6 +263,7 @@ def _next_attempt(
         rest = plan.later[index + 1 :]
         following = dataclasses.replace(
             built,
+            request_id=action.request_id,
             past=(*chain, *skipped),
             plan=dataclasses.replace(plan, later=rest) if rest else None,
         )
@@ -324,3 +330,113 @@ def next_action(action: Action, outcome: Outcome) -> Action:
     return Raise(
         PrimaGateError(f"{type(outcome).__name__} does not answer {type(action).__name__}")
     )
+
+
+def start(
+    request: ChatCompletionRequest,
+    capabilities: Mapping[str, Capabilities],
+    policy: DropPolicy = NO_DROPS,
+    routing: Mapping[tuple[str, str], tuple[Endpoint, ...]] | None = None,
+    retry: RetryPolicy = DEFAULT_RETRY,
+    fallbacks: Fallbacks = NO_FALLBACKS,
+) -> Action:
+    """The first action of a call: ask for its request id, then announce and begin."""
+
+    def begin(request_id: str) -> Action:
+        first = first_action(request, capabilities, policy, routing, retry, fallbacks)
+        if isinstance(first, Dispatch):
+            first = dataclasses.replace(first, request_id=request_id)
+            return Emit((_started(first),), first)
+        if isinstance(first, Raise):
+            return Emit((_call_failed(request_id, first.error),), first)
+        return first
+
+    return NewId(begin)
+
+
+def advance(action: Action, outcome: Outcome) -> Action:
+    """Like `next_action`, and also says what happened so the driver can deliver the events."""
+    if isinstance(action, NewId) and isinstance(outcome, IdOutcome):
+        return action.resume(outcome.value)
+    if isinstance(action, Emit) and isinstance(outcome, EmitOutcome):
+        return action.resume
+    following = next_action(action, outcome)
+    announced = _announce(action, outcome, following)
+    return Emit(announced, following) if announced else following
+
+
+def _request_id(action: Action) -> str:
+    if isinstance(action, Dispatch):
+        return action.request_id
+    if isinstance(action, Random | Sleep):
+        return action.resume.request_id
+    return ""
+
+
+def _model(action: Dispatch) -> str:
+    return f"{action.provider}/{action.request.model}"
+
+
+def _started(action: Dispatch) -> events.DispatchStarted:
+    return events.DispatchStarted(action.request_id, _model(action), _label(action), action.retries)
+
+
+def _call_failed(request_id: str, error: PrimaGateError) -> events.CallFailed:
+    attempts = count_attempts(error.attempt_chain)
+    return events.CallFailed(request_id, type(error).__name__, error.status_code, attempts)
+
+
+def _announce(action: Action, outcome: Outcome, following: Action) -> tuple[events.Event, ...]:
+    """Events for one step. Built from the step's own result so they cannot disagree with it."""
+    rid = _request_id(action)
+    if isinstance(action, Dispatch) and isinstance(outcome, DispatchOutcome):
+        if outcome.error is not None:
+            return _after_dispatch_failure(action, outcome.error, following)
+        if isinstance(following, Return):
+            return (_call_succeeded(rid, following),)
+    if isinstance(action, Random) and isinstance(following, Sleep):
+        resume = following.resume
+        return (
+            events.RetryScheduled(
+                rid, _model(resume), _label(resume), resume.retries, following.seconds
+            ),
+        )
+    if isinstance(action, Sleep) and isinstance(following, Dispatch):
+        return (_started(following),)
+    return ()
+
+
+def _call_succeeded(request_id: str, done: Return) -> events.CallSucceeded:
+    chain = done.response.metadata.attempt_chain if done.response.metadata else []
+    dropped = tuple(done.response.metadata.dropped_params) if done.response.metadata else ()
+    model = next((row.model for row in reversed(chain) if row.skipped is None), "")
+    return events.CallSucceeded(request_id, model, count_attempts(chain), dropped)
+
+
+def _after_dispatch_failure(
+    action: Dispatch, error: PrimaGateError, following: Action
+) -> tuple[events.Event, ...]:
+    rid = action.request_id
+    before = len(attempt_chain(action, error))
+    next_step: events.NextStep
+    skipped: list[Attempt] = []
+    if isinstance(following, Random):
+        next_step = "retry"
+    elif isinstance(following, Dispatch):
+        moved_on = len(following.past) > len(action.past)
+        next_step = "next_attempt" if moved_on else "next_endpoint"
+        skipped = list(following.past[before:])
+    else:
+        next_step = "raise"
+        skipped = error.attempt_chain[before:]
+    announced: list[events.Event] = [
+        events.DispatchFailed(
+            rid, _model(action), _label(action), type(error).__name__, error.status_code, next_step
+        )
+    ]
+    announced += [events.AttemptSkipped(rid, row.model, row.skipped or "") for row in skipped]
+    if isinstance(following, Dispatch):
+        announced.append(_started(following))
+    elif isinstance(following, Raise):
+        announced.append(_call_failed(rid, following.error))
+    return tuple(announced)

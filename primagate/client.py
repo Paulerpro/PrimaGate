@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import math
 import threading
 from collections.abc import Mapping, Sequence
@@ -8,6 +9,7 @@ from typing import Any, Literal, Required, TypedDict, cast, overload
 import httpx2
 from typing_extensions import Unpack
 
+from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.providers import (
     check_drop_params,
@@ -76,6 +78,7 @@ class PrimaGate:
         max_retries: int = DEFAULT_RETRY.max_retries,
         backoff_base: float = DEFAULT_RETRY.backoff_base,
         backoff_max: float = DEFAULT_RETRY.backoff_max,
+        event_handler: EventHandler | None = None,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -87,6 +90,12 @@ class PrimaGate:
         self._retry = _retry_policy(max_retries, backoff_base, backoff_max)
         # Validated here so a bad list fails at setup, not on the first failing call.
         self._fallbacks = parse_fallbacks(fallbacks, default_fallbacks)
+        # An async handler would return a coroutine nobody awaits, so every event would be lost.
+        if event_handler is not None and (
+            not callable(event_handler) or inspect.iscoroutinefunction(event_handler)
+        ):
+            raise BadRequestError("event_handler must be a plain function taking one event")
+        self._event_handler = event_handler
         self._drop_params = drop_params
         self._api_keys = dict(api_keys or {})
         self._base_urls = dict(base_urls or {})
@@ -173,6 +182,7 @@ class PrimaGate:
                     routing=self._provider_routing,
                     retry=self._retry,
                     fallbacks=self._fallbacks,
+                    event_handler=self._event_handler,
                 )
             return self._driver
 
@@ -188,6 +198,7 @@ class PrimaGate:
                     routing=self._provider_routing,
                     retry=self._retry,
                     fallbacks=self._fallbacks,
+                    event_handler=self._event_handler,
                 )
             return self._async_driver
 
