@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar, Literal
 
@@ -16,6 +17,8 @@ class Event:
     """
 
     event_type: ClassVar[str]
+    # The stdlib logging level the event is written at.
+    log_level: ClassVar[int] = logging.INFO
 
     request_id: str
     # Set by the driver when the event is delivered; core never reads a clock.
@@ -71,6 +74,16 @@ class AttemptSkipped(Event):
 
 
 @dataclass(frozen=True)
+class CostUnknown(Event):
+    """The answering model has no price, so the response carries no cost Estimate."""
+
+    event_type: ClassVar[str] = "cost_unknown"
+    log_level: ClassVar[int] = logging.WARNING
+
+    model: str
+
+
+@dataclass(frozen=True)
 class CallSucceeded(Event):
     event_type: ClassVar[str] = "call_succeeded"
 
@@ -95,6 +108,7 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     DispatchFailed,
     RetryScheduled,
     AttemptSkipped,
+    CostUnknown,
     CallSucceeded,
     CallFailed,
 )

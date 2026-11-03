@@ -15,6 +15,7 @@ from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
     parse_fallbacks,
+    parse_price_overrides,
     parse_provider_routing,
 )
 from primagate.drivers.sync import SyncDriver, SyncStream
@@ -80,6 +81,7 @@ class PrimaGate:
         backoff_max: float = DEFAULT_RETRY.backoff_max,
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
+        price_overrides: Mapping[str, Mapping[str, float]] | None = None,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -98,6 +100,8 @@ class PrimaGate:
             raise BadRequestError("event_handler must be a plain function taking one event")
         if not isinstance(payload_retention, bool):
             raise BadRequestError("payload_retention must be True or False")
+        # Validated here so a bad price fails at setup, not when a response is priced.
+        self._price_overrides = parse_price_overrides(price_overrides)
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params
@@ -188,6 +192,7 @@ class PrimaGate:
                     fallbacks=self._fallbacks,
                     event_handler=self._event_handler,
                     payload_retention=self._payload_retention,
+                    price_overrides=self._price_overrides,
                 )
             return self._driver
 
@@ -205,6 +210,7 @@ class PrimaGate:
                     fallbacks=self._fallbacks,
                     event_handler=self._event_handler,
                     payload_retention=self._payload_retention,
+                    price_overrides=self._price_overrides,
                 )
             return self._async_driver
 

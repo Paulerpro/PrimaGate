@@ -207,3 +207,9 @@ def test_the_privacy_sample_prints_what_was_sent(
     assert "Sent: ({'role': 'user', 'content': 'Say hello in five words.'},)" in (
         capsys.readouterr().out
     )
+
+
+def test_readme_explains_costs_and_names_the_price_map() -> None:
+    for phrase in ("metadata.cost", "token_counts", "price_overrides", "unknown_model"):
+        assert phrase in README, phrase
+    assert "docs/price-map.md" in README

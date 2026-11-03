@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -11,6 +12,7 @@ from primagate.adapters import anthropic, openai
 from primagate.core import fallbacks as core_fallbacks
 from primagate.core.call import parse_drop_params, resolve_model
 from primagate.core.ports import Adapter
+from primagate.core.prices import Price
 from primagate.schema.errors import AuthenticationError, BadRequestError
 from primagate.schema.wire import Endpoint, Fallbacks, ProviderSettings
 
@@ -170,3 +172,46 @@ class SettingsResolver:
 
     def __repr__(self) -> str:
         return f"SettingsResolver(resolved={sorted(self._resolved)})"
+
+
+_PRICE_FIELDS = frozenset({"input", "output"})
+
+
+def parse_price_overrides(value: object) -> dict[tuple[str, str], Price]:
+    """Validate the caller's per-model prices (USD per million tokens)."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise BadRequestError("price_overrides must map each model to its input and output price")
+    parsed: dict[tuple[str, str], Price] = {}
+    for name, raw in value.items():
+        if not isinstance(name, str):
+            raise BadRequestError("price_overrides keys must be model names")
+        if not isinstance(raw, Mapping) or set(raw) != _PRICE_FIELDS:
+            raise BadRequestError(
+                f"price_overrides for '{name}' must be a mapping with 'input' and 'output'"
+            )
+        try:
+            key = resolve_model(name)
+        except BadRequestError as err:
+            raise BadRequestError(f"price_overrides: {err.message}") from None
+        if key in parsed:
+            raise BadRequestError(f"price_overrides lists model '{name}' more than once")
+        parsed[key] = Price(
+            _price_number(name, "input", raw["input"]), _price_number(name, "output", raw["output"])
+        )
+    return parsed
+
+
+def _price_number(model: str, label: str, value: object) -> float:
+    # bool is an int subclass, and `True` as a price is a mistake worth catching.
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise BadRequestError(
+            f"price_overrides for '{model}' needs a finite {label} price of 0 or more"
+        )
+    return float(value)

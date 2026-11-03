@@ -12,6 +12,7 @@ import httpx2
 from primagate.core import steps
 from primagate.core.call import advance, parse_drop_params, start
 from primagate.core.ports import Adapter
+from primagate.core.prices import BUNDLED, PriceTable
 from primagate.drivers._shared import (
     END,
     EventHandler,
@@ -120,6 +121,7 @@ class SyncDriver:
         fallbacks: Fallbacks = NO_FALLBACKS,
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
+        price_overrides: PriceTable | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -129,6 +131,7 @@ class SyncDriver:
         self._fallbacks = fallbacks
         self._event_handler = event_handler
         self._payload_retention = payload_retention
+        self._prices = {**BUNDLED, **(price_overrides or {})}
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -144,6 +147,7 @@ class SyncDriver:
         fallbacks: Fallbacks = NO_FALLBACKS,
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
+        price_overrides: PriceTable | None = None,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -154,6 +158,7 @@ class SyncDriver:
             fallbacks=fallbacks,
             event_handler=event_handler,
             payload_retention=payload_retention,
+            price_overrides=price_overrides,
         )
 
     def close(self) -> None:
@@ -168,6 +173,7 @@ class SyncDriver:
             self._retry,
             self._fallbacks,
             self._payload_retention,
+            prices=self._prices,
         )
 
     def run(self, request: ChatCompletionRequest, drop_params: object = None) -> ChatCompletion:

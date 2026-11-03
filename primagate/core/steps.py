@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from primagate.core.prices import BUNDLED, PriceTable
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import Event
 from primagate.schema.types import (
@@ -66,6 +67,8 @@ class Dispatch:
     request_id: str = ""
     # Carried with the call so every event it builds follows the caller's privacy choice.
     payload_retention: bool = False
+    # Bundled prices with the caller's overrides on top; carried so the answer can be priced.
+    prices: PriceTable = field(default_factory=lambda: BUNDLED)
 
 
 @dataclass(frozen=True)

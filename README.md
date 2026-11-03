@@ -210,6 +210,7 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
   `next_attempt` or `raise`.
 - `retry_scheduled`: PrimaGate will wait `delay` seconds and try again.
 - `attempt_skipped`: a fallback was passed over, with the `reason`.
+- `cost_unknown`: the model that answered has no price, so there is no cost Estimate (see step 10).
 - `call_succeeded` and `call_failed`: the call is over.
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
@@ -259,6 +260,61 @@ What the setting does not change:
 
 Turn `payload_retention` on only where logs and handlers are as private as your users' messages.
 A disclosure about what the Tier Routing Analyzer reads comes with that feature.
+
+### 10. See what a call cost
+
+Every response says how many tokens it used and what that probably cost:
+
+```python
+from primagate import completion
+
+response = completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+
+meta = response.metadata
+if meta.cost:
+    print(f"About ${meta.cost.total:.6f} for {meta.token_counts.total_tokens} tokens")
+else:
+    print("No cost Estimate for this response")
+```
+
+`metadata.token_counts` holds the prompt, completion and total tokens the provider reported, and
+`metadata.cost` holds the `input`, `output` and `total` cost in US dollars. They are Estimates:
+the prices come from a small table bundled with PrimaGate, which can be out of date, so do not
+use them as a bill. Nothing is ever blocked, retried or changed because of an Estimate.
+
+An Estimate counts only the prompt and completion tokens at the standard rates. It leaves out
+discounts and surcharges such as cached input, batch pricing and long-prompt tiers, so a call that
+uses them can cost less or more than the figure.
+
+If a model is not in the table, `metadata.cost` is `None`, `metadata.unknown_model` is `True`,
+and PrimaGate logs a `cost_unknown` warning on the `primagate` logger once per call. The call still
+succeeds. If a response carries no usage, there are no counts and no cost. For a streamed call the
+same metadata is on the last chunk, but a stream raises no `cost_unknown` event, so check
+`unknown_model` there.
+
+Pass your own prices, in US dollars per million tokens, to replace the bundled ones or to price a
+model that has none. Your prices win, and a price for a base model such as `gpt-4o` also covers
+its dated snapshots. Each key is a model name (`gpt-4o` or `openai/gpt-4o`, once) and each value
+has exactly `input` and `output`, finite and not below zero; a mistake raises `BadRequestError`
+when you create the instance:
+
+```python
+from primagate import PrimaGate
+
+gate = PrimaGate(price_overrides={"gpt-4o": {"input": 2.0, "output": 8.0}})
+response = gate.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+The bundled table, where its prices come from and how to refresh it are in
+[docs/price-map.md](docs/price-map.md).
 
 ## Notes
 

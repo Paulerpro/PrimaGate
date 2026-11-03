@@ -11,6 +11,7 @@ from typing import Final
 from primagate.core import steps
 from primagate.core.call import attempt_chain
 from primagate.core.ports import Adapter
+from primagate.core.prices import estimate
 from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import Event
@@ -38,7 +39,9 @@ def deliver(events: tuple[Event, ...], handler: EventHandler | None) -> None:
             for k, v in stamped.to_dict().items()
             if k not in ("event_type", "request_id")
         )
-        logger.info("%s request_id=%s %s", stamped.event_type, stamped.request_id, fields)
+        logger.log(
+            stamped.log_level, "%s request_id=%s %s", stamped.event_type, stamped.request_id, fields
+        )
         if handler is None:
             continue
         try:
@@ -141,9 +144,18 @@ class StreamState:
             for chunk in chunks:
                 # The final chunk is where finish reason and usage already live.
                 if any(c.finish_reason for c in chunk.choices):
+                    priced = estimate(
+                        self._action.provider,
+                        self._action.request.model,
+                        chunk.usage,
+                        self._action.prices,
+                    )
                     chunk.metadata = Metadata(
                         dropped_params=list(self._dropped),
                         attempt_chain=attempt_chain(self._action),
+                        token_counts=priced.token_counts,
+                        cost=priced.cost,
+                        unknown_model=priced.unknown_model,
                     )
             self._queue.extend(chunks)
         except PrimaGateError as err:

@@ -107,7 +107,11 @@ def test_metadata_is_omitted_until_the_core_fills_it() -> None:
     named = ChatCompletion(
         id="c", created=1, model="m", choices=[choice], metadata=Metadata(dropped_params=["tools"])
     )
-    assert named.to_dict()["metadata"] == {"dropped_params": ["tools"], "attempt_chain": []}
+    assert named.to_dict()["metadata"] == {
+        "dropped_params": ["tools"],
+        "attempt_chain": [],
+        "unknown_model": False,
+    }
 
 
 def test_a_skipped_row_serializes_its_reason_and_a_normal_row_does_not() -> None:

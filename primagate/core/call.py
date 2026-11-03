@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from primagate.core.classify import Fate, classify
 from primagate.core.fallbacks import fallback_candidates
+from primagate.core.prices import PriceTable, estimate
 from primagate.core.steps import (
     Action,
     Dispatch,
@@ -262,6 +263,7 @@ def _next_attempt(
             built,
             request_id=action.request_id,
             payload_retention=action.payload_retention,
+            prices=action.prices,
             past=(*chain, *skipped),
             plan=dataclasses.replace(plan, later=rest) if rest else None,
         )
@@ -315,8 +317,15 @@ def next_action(action: Action, outcome: Outcome) -> Action:
             return _after_failure(action, outcome.error)
         if outcome.response is None:
             return Raise(PrimaGateError("Dispatch produced neither a response nor an error"))
+        priced = estimate(
+            action.provider, action.request.model, outcome.response.usage, action.prices
+        )
         metadata = Metadata(
-            dropped_params=list(outcome.dropped_params), attempt_chain=attempt_chain(action)
+            dropped_params=list(outcome.dropped_params),
+            attempt_chain=attempt_chain(action),
+            token_counts=priced.token_counts,
+            cost=priced.cost,
+            unknown_model=priced.unknown_model,
         )
         return Return(dataclasses.replace(outcome.response, metadata=metadata))
     if isinstance(action, Random) and isinstance(outcome, RandomOutcome):
@@ -338,6 +347,7 @@ def start(
     retry: RetryPolicy = DEFAULT_RETRY,
     fallbacks: Fallbacks = NO_FALLBACKS,
     payload_retention: bool = False,
+    prices: PriceTable | None = None,
 ) -> Action:
     """The first action of a call: ask for its request id, then announce and begin.
 
@@ -351,6 +361,8 @@ def start(
             first = dataclasses.replace(
                 first, request_id=request_id, payload_retention=payload_retention
             )
+            if prices is not None:
+                first = dataclasses.replace(first, prices=prices)
             return Emit((_started(first),), first)
         if isinstance(first, Raise):
             return Emit((_call_failed(request_id, first.error),), first)
@@ -421,7 +433,11 @@ def _announce(action: Action, outcome: Outcome, following: Action) -> tuple[even
         if outcome.error is not None:
             return _after_dispatch_failure(action, outcome.error, following)
         if isinstance(following, Return):
-            return (_call_succeeded(action, following),)
+            done = (_call_succeeded(action, following),)
+            metadata = following.response.metadata
+            if metadata is not None and metadata.unknown_model:
+                return (events.CostUnknown(rid, _model(action)), *done)
+            return done
     if isinstance(action, Random) and isinstance(following, Sleep):
         resume = following.resume
         return (

@@ -121,11 +121,34 @@ class Attempt(_Serializable):
 
 
 @dataclass
+class TokenCounts(_Serializable):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    # True when the counts were estimated locally instead of reported by the provider.
+    heuristic: bool = False
+
+
+@dataclass
+class Cost(_Serializable):
+    """An Estimate in `currency` from the price map; it is never a billing record."""
+
+    input: float
+    output: float
+    total: float
+    currency: str = "USD"
+
+
+@dataclass
 class Metadata(_Serializable):
     """What the SDK did to a call beyond relaying it."""
 
     dropped_params: list[str] = field(default_factory=list)
     attempt_chain: list[Attempt] = field(default_factory=list)
+    token_counts: TokenCounts | None = None
+    # None when the model has no price or the response carried no usage.
+    cost: Cost | None = None
+    unknown_model: bool = False
 
 
 @dataclass
