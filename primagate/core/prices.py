@@ -58,13 +58,22 @@ def lookup(table: PriceTable, provider: str, model: str) -> Price | None:
     return table.get((provider, base)) if base != model else None
 
 
-def estimate(provider: str, model: str, usage: Usage | None, table: PriceTable) -> Estimate:
+def estimate(
+    provider: str,
+    model: str,
+    usage: Usage | None,
+    table: PriceTable,
+    *,
+    heuristic: bool = False,
+) -> Estimate:
     """Token counts and cost for one answer. Information only: it never raises."""
     price = lookup(table, provider, model)
     unknown = price is None
     if usage is None:
         return Estimate(None, None, unknown)
-    counts = TokenCounts(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+    counts = TokenCounts(
+        usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, heuristic
+    )
     if price is None:
         return Estimate(counts, None, True)
     spent_in = usage.prompt_tokens * price.input / _PER_MILLION

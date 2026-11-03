@@ -16,6 +16,9 @@ dependencies = [
     "typing-extensions>=4.16.0",
 ]
 
+[project.optional-dependencies]
+tokens = ["tiktoken>=0.14,<1"]
+
 [dependency-groups]
 dev = [
     "mypy>=2.4.0",
@@ -44,3 +47,8 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
+
+[[tool.mypy.overrides]]
+module = "tiktoken"
+# An optional extra, so it may not be installed where the type check runs.
+ignore_missing_imports = true

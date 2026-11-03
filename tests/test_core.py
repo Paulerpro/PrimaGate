@@ -44,7 +44,16 @@ def _response() -> ChatCompletion:
 
 def test_closed_action_set_is_dispatch_return_raise_random_sleep_id_emit() -> None:
     names = {t.__name__ for t in steps.ACTION_TYPES}
-    assert names == {"Dispatch", "Return", "Raise", "Random", "Sleep", "NewId", "Emit"}
+    assert names == {
+        "Dispatch",
+        "Return",
+        "Raise",
+        "Random",
+        "Sleep",
+        "NewId",
+        "Emit",
+        "CountTokens",
+    }
 
 
 @pytest.mark.parametrize("name", ["gpt-4o", "openai/gpt-4o"])

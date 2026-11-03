@@ -1,4 +1,5 @@
 import logging
+import sys
 from typing import Any
 
 import httpx2
@@ -105,12 +106,15 @@ def test_a_fallback_answer_is_priced_as_the_fallback(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.007)
 
 
-def test_a_response_without_usage_is_not_an_unknown_model(call: Caller) -> None:
+def test_a_response_without_usage_is_counted_by_the_heuristic_and_priced(
+    call: Caller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "tiktoken", None)
     run = Run({OPENAI: [_no_usage]})
     result = call(run.gate, model=GPT, messages=MSGS)
     meta = result.metadata
-    assert meta is not None and meta.token_counts is None and meta.cost is None
-    assert meta.unknown_model is False
+    assert meta is not None and meta.token_counts is not None and meta.cost is not None
+    assert meta.token_counts.heuristic is True and meta.unknown_model is False
 
 
 def test_an_estimate_never_changes_what_happens(call: Caller) -> None:

@@ -316,6 +316,56 @@ print(response.choices[0].message.content)
 The bundled table, where its prices come from and how to refresh it are in
 [docs/price-map.md](docs/price-map.md).
 
+### 11. Count tokens when the provider does not
+
+OpenAI and Anthropic report how many tokens a call used, and PrimaGate uses their figures. When a
+response reports none, PrimaGate counts the text itself:
+
+- With the optional `tokens` extra installed (`pip install "primagate[tokens]"`), it counts with
+  tiktoken.
+- Without it, or if tiktoken cannot load, it uses a rough count of one token per four characters.
+  The response then says so: `metadata.token_counts.heuristic` is `True`.
+
+Either way the call succeeds, and the cost Estimate from step 10 is priced from those counts. The
+counts are in `response.metadata`; `response.usage` stays `None` because it holds only what the
+provider reported. A stream that reports no usage is not counted.
+
+The counts cover message text and tool-call names and arguments. They leave out tool definitions,
+response schemas and images, and tiktoken's vocabulary is an approximation for models that are not
+OpenAI's, so treat them as a floor, not a bill.
+
+To count your own way, pass a function that takes the model name and some text and returns a whole
+number of tokens. It replaces the default, and its counts are not marked as a rough count. If it
+raises or returns anything else, PrimaGate uses the rough count for that call and logs a warning;
+the call never fails because of counting:
+
+```python
+from primagate import PrimaGate
+
+
+def count(model: str, text: str) -> int:
+    return len(text.split())
+
+
+gate = PrimaGate(token_counter=count)
+response = gate.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+The function must be a plain function, not `async def`. It is called twice per counted response,
+once for the prompt and once for the reply, and from a worker thread when you use `acompletion`,
+so it must be safe to call from several threads and quick.
+
+**Using tiktoken offline.** tiktoken downloads each vocabulary file the first time it needs one.
+On a machine without internet access, run your app once where there is access, with the
+environment variable `TIKTOKEN_CACHE_DIR` pointing at a folder, and copy that folder to the
+offline machine. Set `TIKTOKEN_CACHE_DIR` there to the same path, and tiktoken finds the files
+without downloading. If it still cannot load them, PrimaGate logs one warning and uses the rough
+count from then on.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

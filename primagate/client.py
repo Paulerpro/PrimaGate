@@ -19,6 +19,7 @@ from primagate.drivers.providers import (
     parse_provider_routing,
 )
 from primagate.drivers.sync import SyncDriver, SyncStream
+from primagate.drivers.tokens import TokenCounter, TokenCounting
 from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.types import (
     ChatCompletion,
@@ -82,6 +83,7 @@ class PrimaGate:
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
         price_overrides: Mapping[str, Mapping[str, float]] | None = None,
+        token_counter: TokenCounter | None = None,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -102,6 +104,13 @@ class PrimaGate:
             raise BadRequestError("payload_retention must be True or False")
         # Validated here so a bad price fails at setup, not when a response is priced.
         self._price_overrides = parse_price_overrides(price_overrides)
+        # An async counter would hand back a coroutine instead of a count.
+        if token_counter is not None and (
+            not callable(token_counter) or inspect.iscoroutinefunction(token_counter)
+        ):
+            raise BadRequestError("token_counter must be a plain function taking (model, text)")
+        # One for both drivers, so a broken tiktoken is tried and reported once per instance.
+        self._counting = TokenCounting(token_counter)
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params
@@ -193,6 +202,7 @@ class PrimaGate:
                     event_handler=self._event_handler,
                     payload_retention=self._payload_retention,
                     price_overrides=self._price_overrides,
+                    counting=self._counting,
                 )
             return self._driver
 
@@ -211,6 +221,7 @@ class PrimaGate:
                     event_handler=self._event_handler,
                     payload_retention=self._payload_retention,
                     price_overrides=self._price_overrides,
+                    counting=self._counting,
                 )
             return self._async_driver
 

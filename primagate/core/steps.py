@@ -109,10 +109,29 @@ class Emit:
     resume: Action
 
 
-Action = Dispatch | Return | Raise | Random | Sleep | NewId | Emit
+@dataclass(frozen=True)
+class CountTokens:
+    """Ask the driver to count the text of a response whose provider reported no usage."""
+
+    model: str
+    prompt: str
+    completion: str
+    resume: Callable[[CountOutcome], Action]
+
+
+Action = Dispatch | Return | Raise | Random | Sleep | NewId | Emit | CountTokens
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
-ACTION_TYPES: tuple[type[Action], ...] = (Dispatch, Return, Raise, Random, Sleep, NewId, Emit)
+ACTION_TYPES: tuple[type[Action], ...] = (
+    Dispatch,
+    Return,
+    Raise,
+    Random,
+    Sleep,
+    NewId,
+    Emit,
+    CountTokens,
+)
 
 
 @dataclass(frozen=True)
@@ -144,4 +163,12 @@ class EmitOutcome:
     pass
 
 
-Outcome = DispatchOutcome | RandomOutcome | SleepOutcome | IdOutcome | EmitOutcome
+@dataclass(frozen=True)
+class CountOutcome:
+    prompt_tokens: int
+    completion_tokens: int
+    # True when a built-in rough count was used instead of a real tokenizer or the caller's.
+    heuristic: bool
+
+
+Outcome = DispatchOutcome | RandomOutcome | SleepOutcome | IdOutcome | EmitOutcome | CountOutcome

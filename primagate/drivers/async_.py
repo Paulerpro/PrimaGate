@@ -30,6 +30,7 @@ from primagate.drivers.providers import (
     SettingsSource,
     builtin_adapters,
 )
+from primagate.drivers.tokens import TokenCounting
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
 from primagate.schema.wire import (
@@ -123,6 +124,7 @@ class AsyncDriver:
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
         price_overrides: PriceTable | None = None,
+        counting: TokenCounting | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -133,6 +135,7 @@ class AsyncDriver:
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._prices = {**BUNDLED, **(price_overrides or {})}
+        self._counting = counting or TokenCounting()
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -149,6 +152,7 @@ class AsyncDriver:
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
         price_overrides: PriceTable | None = None,
+        counting: TokenCounting | None = None,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -160,6 +164,7 @@ class AsyncDriver:
             event_handler=event_handler,
             payload_retention=payload_retention,
             price_overrides=price_overrides,
+            counting=counting,
         )
 
     async def aclose(self) -> None:
@@ -245,6 +250,12 @@ class AsyncDriver:
         deliver(action.events, self._event_handler)
         return steps.EmitOutcome()
 
+    async def _count(self, action: steps.CountTokens) -> Step:
+        # Off the event loop: tiktoken reads files and may download a vocabulary on first use.
+        return await asyncio.to_thread(
+            self._counting.count, action.model, action.prompt, action.completion
+        )
+
     async def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -259,4 +270,5 @@ class AsyncDriver:
         steps.Sleep: _sleep,
         steps.NewId: _new_id,
         steps.Emit: _emit,
+        steps.CountTokens: _count,
     }

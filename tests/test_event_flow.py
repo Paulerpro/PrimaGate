@@ -49,6 +49,8 @@ def _drive(
             outcome = steps.RandomOutcome(1.0)
         elif isinstance(action, steps.Sleep):
             outcome = steps.SleepOutcome()
+        elif isinstance(action, steps.CountTokens):
+            outcome = steps.CountOutcome(1, 1, True)
         else:
             outcome = next(outcomes)
         action = advance(action, outcome)

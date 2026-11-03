@@ -213,3 +213,8 @@ def test_readme_explains_costs_and_names_the_price_map() -> None:
     for phrase in ("metadata.cost", "token_counts", "price_overrides", "unknown_model"):
         assert phrase in README, phrase
     assert "docs/price-map.md" in README
+
+
+def test_readme_documents_token_counting_and_offline_use() -> None:
+    for phrase in ("primagate[tokens]", "token_counter", "heuristic", "TIKTOKEN_CACHE_DIR"):
+        assert phrase in README, phrase

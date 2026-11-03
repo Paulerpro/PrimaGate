@@ -6,10 +6,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from primagate.core.classify import Fate, classify
+from primagate.core.counting import completion_text, prompt_text
 from primagate.core.fallbacks import fallback_candidates
 from primagate.core.prices import PriceTable, estimate
 from primagate.core.steps import (
     Action,
+    CountOutcome,
+    CountTokens,
     Dispatch,
     DispatchOutcome,
     DropPolicy,
@@ -36,11 +39,13 @@ from primagate.schema.errors import (
 )
 from primagate.schema.types import (
     Attempt,
+    ChatCompletion,
     ChatCompletionRequest,
     DispatchRecord,
     ErrorInfo,
     Message,
     Metadata,
+    Usage,
 )
 from primagate.schema.wire import (
     DEFAULT_RETRY,
@@ -377,9 +382,47 @@ def advance(action: Action, outcome: Outcome) -> Action:
         return action.resume(outcome.value)
     if isinstance(action, Emit) and isinstance(outcome, EmitOutcome):
         return action.resume
+    if isinstance(action, CountTokens) and isinstance(outcome, CountOutcome):
+        return action.resume(outcome)
     following = next_action(action, outcome)
+    if (
+        isinstance(action, Dispatch)
+        and isinstance(outcome, DispatchOutcome)
+        and isinstance(following, Return)
+        and following.response.usage is None
+    ):
+        answered = following.response
+        return CountTokens(
+            action.request.model,
+            prompt_text(action.request),
+            completion_text(answered),
+            lambda counted: _announced(action, outcome, _counted(action, answered, counted)),
+        )
+    return _announced(action, outcome, following)
+
+
+def _announced(action: Action, outcome: Outcome, following: Action) -> Action:
     announced = _announce(action, outcome, following)
     return Emit(announced, following) if announced else following
+
+
+def _counted(action: Dispatch, answered: ChatCompletion, counted: CountOutcome) -> Return:
+    """The response with counts the SDK made itself, and the cost priced from them."""
+    usage = Usage(
+        counted.prompt_tokens,
+        counted.completion_tokens,
+        counted.prompt_tokens + counted.completion_tokens,
+    )
+    priced = estimate(
+        action.provider, action.request.model, usage, action.prices, heuristic=counted.heuristic
+    )
+    metadata = dataclasses.replace(
+        answered.metadata or Metadata(),
+        token_counts=priced.token_counts,
+        cost=priced.cost,
+        unknown_model=priced.unknown_model,
+    )
+    return Return(dataclasses.replace(answered, metadata=metadata))
 
 
 def _request_id(action: Action) -> str:

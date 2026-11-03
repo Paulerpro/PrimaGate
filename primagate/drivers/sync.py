@@ -30,6 +30,7 @@ from primagate.drivers.providers import (
     SettingsSource,
     builtin_adapters,
 )
+from primagate.drivers.tokens import TokenCounting
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
 from primagate.schema.wire import (
@@ -122,6 +123,7 @@ class SyncDriver:
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
         price_overrides: PriceTable | None = None,
+        counting: TokenCounting | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -132,6 +134,7 @@ class SyncDriver:
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._prices = {**BUNDLED, **(price_overrides or {})}
+        self._counting = counting or TokenCounting()
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -148,6 +151,7 @@ class SyncDriver:
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
         price_overrides: PriceTable | None = None,
+        counting: TokenCounting | None = None,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -159,6 +163,7 @@ class SyncDriver:
             event_handler=event_handler,
             payload_retention=payload_retention,
             price_overrides=price_overrides,
+            counting=counting,
         )
 
     def close(self) -> None:
@@ -240,6 +245,9 @@ class SyncDriver:
         deliver(action.events, self._event_handler)
         return steps.EmitOutcome()
 
+    def _count(self, action: steps.CountTokens) -> Step:
+        return self._counting.count(action.model, action.prompt, action.completion)
+
     def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -254,4 +262,5 @@ class SyncDriver:
         steps.Sleep: _sleep,
         steps.NewId: _new_id,
         steps.Emit: _emit,
+        steps.CountTokens: _count,
     }
