@@ -67,6 +67,8 @@ class Dispatch:
     request_id: str = ""
     # Carried with the call so every event it builds follows the caller's privacy choice.
     payload_retention: bool = False
+    # None for a streamed call, which never uses the Cache.
+    cache_key: str | None = None
     # Bundled prices with the caller's overrides on top; carried so the answer can be priced.
     prices: PriceTable = field(default_factory=lambda: BUNDLED)
 
@@ -119,7 +121,26 @@ class CountTokens:
     resume: Callable[[CountOutcome], Action]
 
 
-Action = Dispatch | Return | Raise | Random | Sleep | NewId | Emit | CountTokens
+@dataclass(frozen=True)
+class CacheRead:
+    """Ask the driver for the answer stored under `key`; `resume` handles a hit or a miss."""
+
+    key: str
+    resume: Callable[[CacheReadOutcome], Action]
+
+
+@dataclass(frozen=True)
+class CacheWrite:
+    """Ask the driver to store `response` under `key`, then go on with `resume`."""
+
+    key: str
+    response: ChatCompletion
+    resume: Action
+
+
+Action = (
+    Dispatch | Return | Raise | Random | Sleep | NewId | Emit | CountTokens | CacheRead | CacheWrite
+)
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
 ACTION_TYPES: tuple[type[Action], ...] = (
@@ -131,6 +152,8 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     NewId,
     Emit,
     CountTokens,
+    CacheRead,
+    CacheWrite,
 )
 
 
@@ -171,4 +194,24 @@ class CountOutcome:
     heuristic: bool
 
 
-Outcome = DispatchOutcome | RandomOutcome | SleepOutcome | IdOutcome | EmitOutcome | CountOutcome
+@dataclass(frozen=True)
+class CacheReadOutcome:
+    # None is a miss.
+    response: ChatCompletion | None
+
+
+@dataclass(frozen=True)
+class CacheWriteOutcome:
+    pass
+
+
+Outcome = (
+    DispatchOutcome
+    | RandomOutcome
+    | SleepOutcome
+    | IdOutcome
+    | EmitOutcome
+    | CountOutcome
+    | CacheReadOutcome
+    | CacheWriteOutcome
+)

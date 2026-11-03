@@ -5,12 +5,17 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+from primagate.core.cache import cache_key
 from primagate.core.classify import Fate, classify
 from primagate.core.counting import completion_text, prompt_text
 from primagate.core.fallbacks import fallback_candidates
 from primagate.core.prices import PriceTable, estimate
 from primagate.core.steps import (
     Action,
+    CacheRead,
+    CacheReadOutcome,
+    CacheWrite,
+    CacheWriteOutcome,
     CountOutcome,
     CountTokens,
     Dispatch,
@@ -269,6 +274,7 @@ def _next_attempt(
             request_id=action.request_id,
             payload_retention=action.payload_retention,
             prices=action.prices,
+            cache_key=action.cache_key,
             past=(*chain, *skipped),
             plan=dataclasses.replace(plan, later=rest) if rest else None,
         )
@@ -368,7 +374,14 @@ def start(
             )
             if prices is not None:
                 first = dataclasses.replace(first, prices=prices)
-            return Emit((_started(first),), first)
+            if request.stream:
+                return Emit((_started(first),), first)
+            # Read only once the request is known to be valid, so an invalid one still raises.
+            key = cache_key(request, policy)
+            if key is None:
+                return Emit((_started(first),), first)
+            first = dataclasses.replace(first, cache_key=key)
+            return CacheRead(key, lambda read: _after_read(first, read))
         if isinstance(first, Raise):
             return Emit((_call_failed(request_id, first.error),), first)
         return first
@@ -384,6 +397,10 @@ def advance(action: Action, outcome: Outcome) -> Action:
         return action.resume
     if isinstance(action, CountTokens) and isinstance(outcome, CountOutcome):
         return action.resume(outcome)
+    if isinstance(action, CacheRead) and isinstance(outcome, CacheReadOutcome):
+        return action.resume(outcome)
+    if isinstance(action, CacheWrite) and isinstance(outcome, CacheWriteOutcome):
+        return action.resume
     following = next_action(action, outcome)
     if (
         isinstance(action, Dispatch)
@@ -403,7 +420,24 @@ def advance(action: Action, outcome: Outcome) -> Action:
 
 def _announced(action: Action, outcome: Outcome, following: Action) -> Action:
     announced = _announce(action, outcome, following)
-    return Emit(announced, following) if announced else following
+    after = _written(action, following)
+    return Emit(announced, after) if announced else after
+
+
+def _written(action: Action, following: Action) -> Action:
+    """Store a final answer before it is returned, so the next identical call can reuse it."""
+    if isinstance(action, Dispatch) and action.cache_key and isinstance(following, Return):
+        return CacheWrite(action.cache_key, following.response, following)
+    return following
+
+
+def _after_read(first: Dispatch, read: CacheReadOutcome) -> Action:
+    """A hit is returned as a copy that says it was not dispatched; a miss goes on to dispatch."""
+    if read.response is None:
+        return Emit((_started(first),), first)
+    hit = dataclasses.replace(read.response, metadata=Metadata(cache_hit=True))
+    announced = events.CacheHit(first.request_id, _model(first), first.cache_key or "")
+    return Emit((announced,), Return(hit))
 
 
 def _counted(action: Dispatch, answered: ChatCompletion, counted: CountOutcome) -> Return:

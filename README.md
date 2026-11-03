@@ -210,8 +210,11 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
   `next_attempt` or `raise`.
 - `retry_scheduled`: PrimaGate will wait `delay` seconds and try again.
 - `attempt_skipped`: a fallback was passed over, with the `reason`.
+- `cache_hit`: the call was answered from memory and nothing was sent (see step 12). It is the
+  only event of such a call.
 - `cost_unknown`: the model that answered has no price, so there is no cost Estimate (see step 10).
-- `call_succeeded` and `call_failed`: the call is over.
+- `call_succeeded` and `call_failed`: a call that was sent is over. A call answered from memory
+  ends with `cache_hit` instead.
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
 names and status codes, never message text, error text or keys. Your handler must be quick and
@@ -365,6 +368,41 @@ environment variable `TIKTOKEN_CACHE_DIR` pointing at a folder, and copy that fo
 offline machine. Set `TIKTOKEN_CACHE_DIR` there to the same path, and tiktoken finds the files
 without downloading. If it still cannot load them, PrimaGate logs one warning and uses the rough
 count from then on.
+
+### 12. Don't pay twice for the same call
+
+PrimaGate remembers answers in memory. When you make the exact same call again on the same
+`PrimaGate` instance (or through the module-level functions, which share one), the answer comes
+back from memory and nothing is sent to the provider:
+
+```python
+from primagate import completion
+
+messages = [{"role": "user", "content": "Say hello in five words."}]
+first = completion(model="gpt-4o", messages=messages)
+second = completion(model="gpt-4o", messages=messages)
+
+print(second.choices[0].message.content)
+print("From memory:", second.metadata.cache_hit)
+```
+
+"The exact same call" means the same model name (as you wrote it), messages, `tools`,
+`response_format`, sampling settings (`temperature`, `top_p`, `max_tokens`, `stop`, `n`, `seed`)
+and `drop_params`. Change any of them and the call goes to the provider. A call that differs only
+in `drop_params` is a different call.
+
+Each caller gets its own copy, so changing a response never changes what the next caller gets. A
+copy from memory has `metadata.cache_hit` set to `True` and nothing else in its metadata: no
+attempt chain, token counts or cost, because nothing was spent. (`response.usage` still shows what
+the original answer used.) Its only event is `cache_hit`, which names the model and a hash of the
+request, never the content, whatever `payload_retention` says.
+
+Only successful, non-streamed answers are remembered, including one that a fallback model gave, which
+is then served for the same call even after your first choice recovers. Calls made at the same
+time are each sent, because nothing is remembered until the first answer arrives. A stream is never served from memory and
+never saved. The memory is per instance, lives until the instance is gone, and has no size limit
+or off switch yet, so a call you repeat on purpose, such as a high-temperature call that should
+give a different answer each time, is answered from memory too.
 
 ## Notes
 

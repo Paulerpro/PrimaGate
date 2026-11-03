@@ -51,6 +51,10 @@ def _drive(
             outcome = steps.SleepOutcome()
         elif isinstance(action, steps.CountTokens):
             outcome = steps.CountOutcome(1, 1, True)
+        elif isinstance(action, steps.CacheRead):
+            outcome = steps.CacheReadOutcome(None)
+        elif isinstance(action, steps.CacheWrite):
+            outcome = steps.CacheWriteOutcome()
         else:
             outcome = next(outcomes)
         action = advance(action, outcome)
@@ -198,7 +202,7 @@ def test_emit_and_new_id_are_part_of_the_closed_action_set() -> None:
 
 def test_an_outcome_that_does_not_answer_the_action_is_refused() -> None:
     action = advance(start(_request(), CAPS), steps.IdOutcome("r"))
-    assert isinstance(action, steps.Emit)
+    assert isinstance(action, steps.CacheRead)
     bad = advance(action, steps.SleepOutcome())
     assert isinstance(bad, steps.Raise)
 
@@ -249,3 +253,36 @@ def test_the_endpoint_in_an_event_never_carries_credentials(base_url: str, shown
     seen, _ = _drive(first, script)
     started = [e for e in seen if isinstance(e, events.DispatchStarted)]
     assert [s.endpoint for s in started] == ["openai", shown]
+
+
+def test_a_cache_hit_emits_only_cache_hit_and_returns_a_copy_marked_as_one() -> None:
+    first = advance(start(_request(), CAPS), steps.IdOutcome("req-1"))
+    assert isinstance(first, steps.CacheRead)
+    stored = _ok()
+    emit = advance(first, steps.CacheReadOutcome(stored))
+    assert isinstance(emit, steps.Emit)
+    assert [e.event_type for e in emit.events] == ["cache_hit"]
+    assert isinstance(emit.resume, steps.Return)
+    served = emit.resume.response
+    assert served.metadata is not None and served.metadata.cache_hit is True
+    assert stored.metadata is None
+
+
+def test_a_miss_dispatches_and_the_final_answer_is_written_before_it_is_returned() -> None:
+    first = advance(start(_request(), CAPS), steps.IdOutcome("req-1"))
+    assert isinstance(first, steps.CacheRead)
+    emit = advance(first, steps.CacheReadOutcome(None))
+    assert isinstance(emit, steps.Emit) and isinstance(emit.resume, steps.Dispatch)
+    assert emit.resume.cache_key == first.key
+    counting = advance(emit.resume, steps.DispatchOutcome(response=_ok()))
+    assert isinstance(counting, steps.CountTokens)
+    announced = counting.resume(steps.CountOutcome(1, 1, True))
+    assert isinstance(announced, steps.Emit) and isinstance(announced.resume, steps.CacheWrite)
+    write = announced.resume
+    assert write.key == first.key and isinstance(write.resume, steps.Return)
+
+
+def test_a_streamed_request_gets_no_cache_step() -> None:
+    first = advance(start(_request(stream=True), CAPS), steps.IdOutcome("req-1"))
+    assert isinstance(first, steps.Emit) and isinstance(first.resume, steps.Dispatch)
+    assert first.resume.cache_key is None

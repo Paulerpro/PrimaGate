@@ -24,6 +24,7 @@ from primagate.drivers._shared import (
     prepare,
     settle,
 )
+from primagate.drivers.cache import ResponseCache
 from primagate.drivers.providers import (
     ProviderRouting,
     SettingsResolver,
@@ -125,6 +126,7 @@ class AsyncDriver:
         payload_retention: bool = False,
         price_overrides: PriceTable | None = None,
         counting: TokenCounting | None = None,
+        cache: ResponseCache | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -136,6 +138,7 @@ class AsyncDriver:
         self._payload_retention = payload_retention
         self._prices = {**BUNDLED, **(price_overrides or {})}
         self._counting = counting or TokenCounting()
+        self._cache = cache or ResponseCache()
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -153,6 +156,7 @@ class AsyncDriver:
         payload_retention: bool = False,
         price_overrides: PriceTable | None = None,
         counting: TokenCounting | None = None,
+        cache: ResponseCache | None = None,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -165,6 +169,7 @@ class AsyncDriver:
             payload_retention=payload_retention,
             price_overrides=price_overrides,
             counting=counting,
+            cache=cache,
         )
 
     async def aclose(self) -> None:
@@ -256,6 +261,13 @@ class AsyncDriver:
             self._counting.count, action.model, action.prompt, action.completion
         )
 
+    async def _cache_read(self, action: steps.CacheRead) -> Step:
+        return steps.CacheReadOutcome(self._cache.get(action.key))
+
+    async def _cache_write(self, action: steps.CacheWrite) -> Step:
+        self._cache.put(action.key, action.response)
+        return steps.CacheWriteOutcome()
+
     async def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -271,4 +283,6 @@ class AsyncDriver:
         steps.NewId: _new_id,
         steps.Emit: _emit,
         steps.CountTokens: _count,
+        steps.CacheRead: _cache_read,
+        steps.CacheWrite: _cache_write,
     }

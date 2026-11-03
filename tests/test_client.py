@@ -229,10 +229,11 @@ def test_message_instances_are_accepted(call: Caller) -> None:
 
 async def test_acompletion_matches_completion() -> None:
     gate, calls = _gate()
+    other, other_calls = _gate()
     sync_resp = gate.completion(model="gpt-4o", messages=MSGS)
-    async_resp = await gate.acompletion(model="gpt-4o", messages=MSGS)
+    async_resp = await other.acompletion(model="gpt-4o", messages=MSGS)
     assert async_resp == sync_resp
-    assert len(calls) == 2
+    assert len(calls) == 1 and len(other_calls) == 1
 
 
 async def test_aclose_closes_the_loop_client_and_blocks_later_calls() -> None:
@@ -268,7 +269,12 @@ def test_each_event_loop_gets_its_own_client_and_sync_has_another() -> None:
 
 async def test_one_client_serves_concurrent_tasks_on_a_loop() -> None:
     gate, calls = _gate()
-    await asyncio.gather(*(gate.acompletion(model="gpt-4o", messages=MSGS) for _ in range(5)))
+    await asyncio.gather(
+        *(
+            gate.acompletion(model="gpt-4o", messages=[{"role": "user", "content": f"hi {i}"}])
+            for i in range(5)
+        )
+    )
     assert len(calls) == 5
     clients = list(gate._async_driver._transport._clients.values())  # type: ignore[union-attr]
     assert len(clients) == 1
@@ -296,7 +302,7 @@ async def test_driver_is_reused_after_the_key_disappears(monkeypatch: pytest.Mon
     gate, calls = _gate(key=None)
     await gate.acompletion(model="gpt-4o", messages=MSGS)
     monkeypatch.delenv("OPENAI_API_KEY")
-    await gate.acompletion(model="gpt-4o", messages=MSGS)
+    await gate.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "again"}])
     assert len(calls) == 2
 
 

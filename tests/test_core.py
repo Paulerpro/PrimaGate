@@ -53,6 +53,8 @@ def test_closed_action_set_is_dispatch_return_raise_random_sleep_id_emit() -> No
         "NewId",
         "Emit",
         "CountTokens",
+        "CacheRead",
+        "CacheWrite",
     }
 
 

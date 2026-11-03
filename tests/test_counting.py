@@ -92,6 +92,10 @@ def _walk(response: ChatCompletion) -> tuple[list[steps.Action], list[events.Eve
             outcome = steps.EmitOutcome()
         elif isinstance(action, steps.CountTokens):
             outcome = steps.CountOutcome(5, 7, True)
+        elif isinstance(action, steps.CacheRead):
+            outcome = steps.CacheReadOutcome(None)
+        elif isinstance(action, steps.CacheWrite):
+            outcome = steps.CacheWriteOutcome()
         else:
             outcome = steps.DispatchOutcome(response=response)
     return seen, announced, action

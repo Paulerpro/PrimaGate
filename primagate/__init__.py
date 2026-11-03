@@ -18,6 +18,7 @@ from primagate.schema.errors import (
 )
 from primagate.schema.events import (
     AttemptSkipped,
+    CacheHit,
     CallFailed,
     CallSucceeded,
     CostUnknown,
@@ -39,6 +40,7 @@ __all__ = [
     "AttemptsExhaustedError",
     "AuthenticationError",
     "BadRequestError",
+    "CacheHit",
     "CallFailed",
     "CallSucceeded",
     "CostUnknown",

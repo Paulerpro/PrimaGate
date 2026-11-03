@@ -111,6 +111,7 @@ def test_metadata_is_omitted_until_the_core_fills_it() -> None:
         "dropped_params": ["tools"],
         "attempt_chain": [],
         "unknown_model": False,
+        "cache_hit": False,
     }
 
 

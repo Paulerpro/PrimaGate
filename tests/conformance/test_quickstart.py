@@ -218,3 +218,17 @@ def test_readme_explains_costs_and_names_the_price_map() -> None:
 def test_readme_documents_token_counting_and_offline_use() -> None:
     for phrase in ("primagate[tokens]", "token_counter", "heuristic", "TIKTOKEN_CACHE_DIR"):
         assert phrase in README, phrase
+
+
+def test_readme_explains_the_cache_and_its_limits() -> None:
+    for phrase in ("cache_hit", "no size limit", "never the content", "streamed"):
+        assert phrase in README, phrase
+
+
+def test_the_cache_sample_reports_a_hit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "cache_hit" in s)
+    calls = _run(sample, monkeypatch)
+    assert len(calls) == 1, "the second identical call must not reach the provider"
+    assert "From memory: True" in capsys.readouterr().out

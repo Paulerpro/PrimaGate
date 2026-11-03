@@ -11,6 +11,7 @@ from typing_extensions import Unpack
 
 from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
+from primagate.drivers.cache import ResponseCache
 from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
@@ -111,6 +112,8 @@ class PrimaGate:
             raise BadRequestError("token_counter must be a plain function taking (model, text)")
         # One for both drivers, so a broken tiktoken is tried and reported once per instance.
         self._counting = TokenCounting(token_counter)
+        # One for both drivers, so a sync call and an async call can answer each other.
+        self._cache = ResponseCache()
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params
@@ -203,6 +206,7 @@ class PrimaGate:
                     payload_retention=self._payload_retention,
                     price_overrides=self._price_overrides,
                     counting=self._counting,
+                    cache=self._cache,
                 )
             return self._driver
 
@@ -222,6 +226,7 @@ class PrimaGate:
                     payload_retention=self._payload_retention,
                     price_overrides=self._price_overrides,
                     counting=self._counting,
+                    cache=self._cache,
                 )
             return self._async_driver
 

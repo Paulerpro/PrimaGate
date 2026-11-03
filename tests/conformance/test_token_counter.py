@@ -99,7 +99,8 @@ def test_a_failed_load_falls_back_once_and_is_not_retried(
     run = Run({OPENAI: [_no_usage]})
     with caplog.at_level(logging.WARNING, logger="primagate"):
         first = call(run.gate, model="gpt-4o", messages=MSGS)
-        second = call(run.gate, model="gpt-4o", messages=MSGS)
+        # A different request, so the Cache does not answer it and it is counted again.
+        second = call(run.gate, model="gpt-4o", messages=[{"role": "user", "content": "again"}])
     assert _counts(first)[2] is True and _counts(second)[2] is True
     assert fake.asked == ["o200k_base"], "the failed load is not attempted again"
     warned = [r for r in caplog.records if r.name == "primagate" and r.levelno >= logging.WARNING]

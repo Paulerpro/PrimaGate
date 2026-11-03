@@ -149,6 +149,8 @@ class Metadata(_Serializable):
     # None when the model has no price or the response carried no usage.
     cost: Cost | None = None
     unknown_model: bool = False
+    # True when the answer came from the Cache and nothing was sent to a provider.
+    cache_hit: bool = False
 
 
 @dataclass

@@ -74,6 +74,16 @@ class AttemptSkipped(Event):
 
 
 @dataclass(frozen=True)
+class CacheHit(Event):
+    """A call was answered from the Cache. Only the model and a hash are named, never content."""
+
+    event_type: ClassVar[str] = "cache_hit"
+
+    model: str
+    key: str
+
+
+@dataclass(frozen=True)
 class CostUnknown(Event):
     """The answering model has no price, so the response carries no cost Estimate."""
 
@@ -108,6 +118,7 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     DispatchFailed,
     RetryScheduled,
     AttemptSkipped,
+    CacheHit,
     CostUnknown,
     CallSucceeded,
     CallFailed,
