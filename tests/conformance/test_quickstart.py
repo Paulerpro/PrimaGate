@@ -233,6 +233,28 @@ def test_readme_explains_the_cache_and_its_limits() -> None:
     assert "no size limit" not in README
 
 
+def test_readme_explains_how_to_trace_a_decision() -> None:
+    for phrase in (
+        "profile_id",
+        "input_fingerprint",
+        "prep_prompt_version",
+        "analyzer_prompt_version",
+        "binding_id",
+        "Nothing emits these",
+        "no decision event",
+    ):
+        assert phrase in README, phrase
+
+
+def test_the_trace_sample_runs_and_finds_the_event_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "by_binding" in s)
+    calls = _run(sample, monkeypatch)
+    assert len(calls) == 1
+    assert "routing_decision req-example profile-1 fingerprint-1" in capsys.readouterr().out
+
+
 def test_the_cache_sample_reports_a_hit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

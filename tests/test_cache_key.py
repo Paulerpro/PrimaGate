@@ -97,3 +97,12 @@ def test_a_request_json_cannot_encode_has_no_key() -> None:
 
 def test_streaming_is_not_part_of_the_key() -> None:
     assert cache_key(_request(stream=True), DropPolicy()) == cache_key(_request(), DropPolicy())
+
+
+def test_the_salt_changes_every_key_and_the_same_salt_repeats_it() -> None:
+    plain = cache_key(_request(), DropPolicy())
+    one = cache_key(_request(), DropPolicy(), b"salt-one")
+    two = cache_key(_request(), DropPolicy(), b"salt-two")
+    assert one == cache_key(_request(), DropPolicy(), b"salt-one")
+    assert len({plain, one, two}) == 3
+    assert one is not None and len(one) == 64

@@ -75,7 +75,7 @@ class AttemptSkipped(Event):
 
 @dataclass(frozen=True)
 class CacheHit(Event):
-    """A call was answered from the Cache. Only the model and a hash are named, never content."""
+    """A call was answered from the Cache. Only the model and a salted hash, never content."""
 
     event_type: ClassVar[str] = "cache_hit"
 
@@ -113,6 +113,48 @@ class CallFailed(Event):
     attempts: int
 
 
+@dataclass(frozen=True)
+class DecisionEvent(Event):
+    """What an operator needs to explain one routing decision, without any conversation content.
+
+    Every field is always present. With no READY Profile, as for an Interim Binding request, the
+    value is "unknown", the word the Tier Binding contract uses for an undisclosed field, so a
+    lookup never meets a missing key.
+    """
+
+    profile_id: str
+    input_fingerprint: str
+    prep_prompt_version: str
+    analyzer_prompt_version: str
+    binding_id: str
+
+    def __post_init__(self) -> None:
+        # The base has no event_type, so an instance of it could not be logged or serialised.
+        if type(self) is DecisionEvent:
+            raise TypeError("DecisionEvent is a base class; use one of its subclasses")
+
+
+@dataclass(frozen=True)
+class RoutingDecision(DecisionEvent):
+    """A request was routed to a Tier."""
+
+    event_type: ClassVar[str] = "routing_decision"
+
+
+@dataclass(frozen=True)
+class LowConfidenceDowngrade(DecisionEvent):
+    """The Analyzer answered below the confidence threshold, so the default Tier was used."""
+
+    event_type: ClassVar[str] = "low_confidence_downgrade"
+
+
+@dataclass(frozen=True)
+class PremiumRoutingSelected(DecisionEvent):
+    """The resolved Tier costs more than the cheapest eligible candidate."""
+
+    event_type: ClassVar[str] = "premium_routing_selected"
+
+
 EVENT_CLASSES: tuple[type[Event], ...] = (
     DispatchStarted,
     DispatchFailed,
@@ -122,7 +164,10 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     CostUnknown,
     CallSucceeded,
     CallFailed,
+    RoutingDecision,
+    LowConfidenceDowngrade,
+    PremiumRoutingSelected,
 )
 EVENT_TYPES: tuple[str, ...] = tuple(cls.event_type for cls in EVENT_CLASSES)
 # Names the package root re-exports.
-EXPORTED: tuple[str, ...] = ("Event", *(cls.__name__ for cls in EVENT_CLASSES))
+EXPORTED: tuple[str, ...] = ("Event", "DecisionEvent", *(cls.__name__ for cls in EVENT_CLASSES))

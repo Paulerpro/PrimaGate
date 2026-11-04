@@ -187,6 +187,7 @@ class SyncDriver:
             self._payload_retention,
             prices=self._prices,
             use_cache=use_cache,
+            cache_salt=self._cache.salt,
         )
 
     def run(

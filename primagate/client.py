@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import math
+import secrets
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Required, TypedDict, cast, overload
@@ -115,7 +116,7 @@ class PrimaGate:
         # One for both drivers, so a broken tiktoken is tried and reported once per instance.
         self._counting = TokenCounting(token_counter)
         # One for both drivers, so a sync call and an async call can answer each other.
-        self._cache = ResponseCache(_cache_size(cache_max_entries))
+        self._cache = ResponseCache(_cache_size(cache_max_entries), secrets.token_bytes(16))
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params

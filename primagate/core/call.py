@@ -361,6 +361,7 @@ def start(
     payload_retention: bool = False,
     prices: PriceTable | None = None,
     use_cache: bool = True,
+    cache_salt: bytes = b"",
 ) -> Action:
     """The first action of a call: ask for its request id, then announce and begin.
 
@@ -379,7 +380,7 @@ def start(
             if request.stream or not use_cache:
                 return Emit((_started(first),), first)
             # Read only once the request is known to be valid, so an invalid one still raises.
-            key = cache_key(request, policy)
+            key = cache_key(request, policy, cache_salt)
             if key is None:
                 return Emit((_started(first),), first)
             first = dataclasses.replace(first, cache_key=key)

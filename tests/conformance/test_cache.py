@@ -10,7 +10,10 @@ from test_events import Recorder
 from test_fallback_run import CLAUDE, GPT, _fallbacks
 from test_retry_routing import MODELS, PRIMARY, Run, _status
 
+from primagate.core.cache import cache_key
+from primagate.core.steps import DropPolicy
 from primagate.schema import errors, events
+from primagate.schema.types import ChatCompletionRequest, Message
 
 OPENAI, ANTHROPIC = PRIMARY["openai"], PRIMARY["anthropic"]
 ASKED, ANSWERED = "CACHE-SECRET-QUESTION", "CACHE-SECRET-ANSWER"
@@ -358,3 +361,35 @@ def test_a_bad_cache_flag_is_refused_on_a_stream_too(stream_call: StreamCaller) 
     refused = stream_call(run.gate, model=GPT, messages=MSGS, cache="no")
     assert isinstance(refused.call_error, errors.BadRequestError)
     assert run.sent == []
+
+
+def _hit_keys(handler: Recorder) -> list[str]:
+    return [e.key for e in handler.seen if isinstance(e, events.CacheHit)]
+
+
+def test_the_logged_key_is_salted_per_instance_and_repeats_within_one(call: Caller) -> None:
+    per_instance = []
+    for _ in range(2):
+        handler = Recorder()
+        run = Run({OPENAI: [_answer]}, event_handler=handler)
+        for _ in range(3):
+            call(run.gate, model=GPT, messages=MSGS)
+        per_instance.append(_hit_keys(handler))
+    first, second = per_instance
+    assert len(first) == 2 and len(set(first)) == 1
+    assert first != second, "two instances must not share a key for the same request"
+
+
+def test_the_logged_key_cannot_be_rebuilt_from_the_request_alone(call: Caller) -> None:
+    handler = Recorder()
+    run = Run({OPENAI: [_answer]}, event_handler=handler)
+    call(run.gate, model=GPT, messages=MSGS)
+    call(run.gate, model=GPT, messages=MSGS)
+    request = ChatCompletionRequest(model=GPT, messages=[Message(role="user", content=ASKED)])
+    logged = _hit_keys(handler)
+    assert logged
+    # The control: with the instance's secret the same request gives exactly the logged key, so
+    # the guess below differs from it only by the secret and not by some other detail.
+    assert cache_key(request, DropPolicy(), run.gate._cache.salt) in logged
+    assert len(run.gate._cache.salt) >= 16
+    assert cache_key(request, DropPolicy()) not in logged

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import secrets
 import threading
 from collections import OrderedDict
 
@@ -18,7 +19,10 @@ class ResponseCache:
     bound counts answers, not bytes. A maximum of 0 keeps nothing.
     """
 
-    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES) -> None:
+    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES, salt: bytes | None = None) -> None:
+        # Keys the request hash; the drivers hand it to core, which never makes a secret itself.
+        # A cache built without one still gets its own, so no path logs a guessable hash.
+        self.salt = secrets.token_bytes(16) if salt is None else salt
         self._lock = threading.Lock()
         self._max = max_entries
         self._entries: OrderedDict[str, ChatCompletion] = OrderedDict()

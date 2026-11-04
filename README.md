@@ -215,6 +215,9 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
 - `cost_unknown`: the model that answered has no price, so there is no cost Estimate (see step 10).
 - `call_succeeded` and `call_failed`: a call that was sent is over. A call answered from memory
   ends with `cache_hit` instead.
+- `routing_decision`, `low_confidence_downgrade` and `premium_routing_selected`: decision events
+  for Tier Routing, which is not part of PrimaGate yet. They are defined now so you can write
+  handlers early; nothing emits them (see step 13).
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
 names and status codes, never message text, error text or keys. Your handler must be quick and
@@ -394,7 +397,7 @@ in `drop_params` is a different call.
 Each caller gets its own copy, so changing a response never changes what the next caller gets. A
 copy from memory has `metadata.cache_hit` set to `True` and nothing else in its metadata: no
 attempt chain, token counts or cost, because nothing was spent. (`response.usage` still shows what
-the original answer used.) Its only event is `cache_hit`, which names the model and a hash of the
+the original answer used.) Its only event is `cache_hit`, which names the model and a salted hash of the
 request, never the content, whatever `payload_retention` says.
 
 Only successful, non-streamed answers are remembered, including one that a fallback model gave, which
@@ -422,6 +425,72 @@ stays. Set it to `0` to turn the memory off for the whole instance. A near-ident
 as the same prompt with one character changed, is never answered from memory. A stream ignores
 `cache` and the bound. Both limits count answers, not bytes, so very large answers still take
 more memory.
+
+### 13. Trace a decision
+
+Tier Routing will send each request to a model chosen by an Analyzer. Every such decision is
+reported as an event, and an event never holds conversation content, so you can explain a choice
+without reading anything anyone said. The three decision events, `routing_decision`,
+`low_confidence_downgrade` (the Analyzer was not confident, so the default Tier was used) and
+`premium_routing_selected` (the chosen Tier costs more than the cheapest eligible one), all carry the fields below. Their
+details may grow when Tier Routing arrives, but these fields will stay:
+
+- `profile_id`: the Profile the decision used.
+- `input_fingerprint`: the fingerprint of the app inputs that Profile was prepared from.
+- `prep_prompt_version` and `analyzer_prompt_version`: the prompts that made the Profile and the
+  decision.
+- `binding_id`: the model binding that was chosen.
+
+Each is always a string. When no Profile is ready yet, the value is `"unknown"`. Nothing emits these
+events in this release, so the sample below hands in one made-up event to show how you will look
+one up: index them in your handler, and find the ones for an id when a response looks wrong.
+
+```python
+from collections import defaultdict
+
+from primagate import DecisionEvent, Event, PrimaGate, RoutingDecision
+
+by_profile: dict[str, list[DecisionEvent]] = defaultdict(list)
+by_fingerprint: dict[str, list[DecisionEvent]] = defaultdict(list)
+by_binding: dict[str, list[DecisionEvent]] = defaultdict(list)
+
+
+def keep(event: Event) -> None:
+    if isinstance(event, DecisionEvent):
+        by_profile[event.profile_id].append(event)
+        by_fingerprint[event.input_fingerprint].append(event)
+        by_binding[event.binding_id].append(event)
+
+
+gate = PrimaGate(event_handler=keep)
+response = gate.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+
+# A stand-in for an event you will receive, so the lookup below has something to find.
+keep(
+    RoutingDecision(
+        "req-example",
+        profile_id="profile-1",
+        input_fingerprint="fingerprint-1",
+        prep_prompt_version="prep-1",
+        analyzer_prompt_version="analyzer-1",
+        binding_id="premium-binding",
+    )
+)
+
+for event in by_binding.get("premium-binding", []):
+    print(event.event_type, event.request_id, event.profile_id, event.input_fingerprint)
+```
+
+Every event is also written to the `primagate` logger as `name=value` pairs, so without a handler
+you can search your logs for `binding_id=premium-binding`. A call answered from memory emits
+`cache_hit` and no decision event, because no decision was made. Its `key` is a hash made with a
+secret that each `PrimaGate` instance creates for itself: it shows that two hits were the same
+request, and it cannot be used to check a guess at a prompt. It changes every time the process
+starts, so do not store it.
 
 ## Notes
 

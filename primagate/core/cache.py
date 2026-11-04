@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 
 from primagate.core.steps import DropPolicy
@@ -10,7 +11,7 @@ from primagate.schema.types import ChatCompletionRequest
 _KEY_VERSION = 1
 
 
-def cache_key(request: ChatCompletionRequest, policy: DropPolicy) -> str | None:
+def cache_key(request: ChatCompletionRequest, policy: DropPolicy, salt: bytes = b"") -> str | None:
     """The identity of a request for the Cache: everything that can change the answer.
 
     The model is hashed as the caller wrote it, and `stream` is left out because streams never
@@ -18,6 +19,9 @@ def cache_key(request: ChatCompletionRequest, policy: DropPolicy) -> str | None:
     sent, so a call that allowed drops must not be answered with one that did not. A request
     holding something JSON cannot encode has no key, so it is never cached: guessing a text for
     it could give two different requests the same key.
+
+    The hash is keyed with a secret the driver made for this instance, so a log line holding it
+    cannot be used to test a guess at a short prompt. Core only receives that secret as data.
     """
     payload = {
         "v": _KEY_VERSION,
@@ -37,4 +41,4 @@ def cache_key(request: ChatCompletionRequest, policy: DropPolicy) -> str | None:
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError):
         return None
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return hmac.new(salt, blob.encode("utf-8"), hashlib.sha256).hexdigest()
