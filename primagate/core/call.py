@@ -275,6 +275,7 @@ def _next_attempt(
             payload_retention=action.payload_retention,
             prices=action.prices,
             cache_key=action.cache_key,
+            no_cache=action.no_cache,
             past=(*chain, *skipped),
             plan=dataclasses.replace(plan, later=rest) if rest else None,
         )
@@ -359,6 +360,7 @@ def start(
     fallbacks: Fallbacks = NO_FALLBACKS,
     payload_retention: bool = False,
     prices: PriceTable | None = None,
+    use_cache: bool = True,
 ) -> Action:
     """The first action of a call: ask for its request id, then announce and begin.
 
@@ -374,7 +376,7 @@ def start(
             )
             if prices is not None:
                 first = dataclasses.replace(first, prices=prices)
-            if request.stream:
+            if request.stream or not use_cache:
                 return Emit((_started(first),), first)
             # Read only once the request is known to be valid, so an invalid one still raises.
             key = cache_key(request, policy)
@@ -426,7 +428,12 @@ def _announced(action: Action, outcome: Outcome, following: Action) -> Action:
 
 def _written(action: Action, following: Action) -> Action:
     """Store a final answer before it is returned, so the next identical call can reuse it."""
-    if isinstance(action, Dispatch) and action.cache_key and isinstance(following, Return):
+    if (
+        isinstance(action, Dispatch)
+        and action.cache_key
+        and not action.no_cache
+        and isinstance(following, Return)
+    ):
         return CacheWrite(action.cache_key, following.response, following)
     return following
 

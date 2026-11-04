@@ -286,3 +286,37 @@ def test_a_streamed_request_gets_no_cache_step() -> None:
     first = advance(start(_request(stream=True), CAPS), steps.IdOutcome("req-1"))
     assert isinstance(first, steps.Emit) and isinstance(first.resume, steps.Dispatch)
     assert first.resume.cache_key is None
+
+
+def test_a_call_that_opts_out_gets_no_cache_step() -> None:
+    first = advance(start(_request(), CAPS, use_cache=False), steps.IdOutcome("req-1"))
+    assert isinstance(first, steps.Emit) and isinstance(first.resume, steps.Dispatch)
+    assert first.resume.cache_key is None
+
+
+def test_a_dispatch_marked_do_not_cache_is_answered_but_not_written() -> None:
+    first = advance(start(_request(), CAPS), steps.IdOutcome("req-1"))
+    assert isinstance(first, steps.CacheRead)
+    emit = advance(first, steps.CacheReadOutcome(None))
+    assert isinstance(emit, steps.Emit) and isinstance(emit.resume, steps.Dispatch)
+    marked = dataclasses.replace(emit.resume, no_cache=True)
+    counting = advance(marked, steps.DispatchOutcome(response=_ok()))
+    assert isinstance(counting, steps.CountTokens)
+    announced = counting.resume(steps.CountOutcome(1, 1, True))
+    assert isinstance(announced, steps.Emit) and isinstance(announced.resume, steps.Return)
+
+
+def test_the_marker_survives_a_fallback() -> None:
+    no_retry = RetryPolicy(max_retries=0, backoff_base=0.5, backoff_max=1.0)
+    first = advance(
+        start(_request(), CAPS, fallbacks=FALLBACKS, retry=no_retry), steps.IdOutcome("req-1")
+    )
+    assert isinstance(first, steps.CacheRead)
+    emit = advance(first, steps.CacheReadOutcome(None))
+    assert isinstance(emit, steps.Emit) and isinstance(emit.resume, steps.Dispatch)
+    marked = dataclasses.replace(emit.resume, no_cache=True)
+    following = advance(marked, _fail(503, errors.ServiceUnavailableError))
+    while isinstance(following, steps.Emit):
+        following = following.resume
+    assert isinstance(following, steps.Dispatch) and following.provider == "anthropic"
+    assert following.no_cache is True

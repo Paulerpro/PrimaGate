@@ -174,7 +174,9 @@ class SyncDriver:
     def close(self) -> None:
         self._transport.close()
 
-    def _first(self, request: ChatCompletionRequest, drop_params: object) -> steps.Action:
+    def _first(
+        self, request: ChatCompletionRequest, drop_params: object, use_cache: bool = True
+    ) -> steps.Action:
         return start(
             request,
             self._capabilities,
@@ -184,10 +186,13 @@ class SyncDriver:
             self._fallbacks,
             self._payload_retention,
             prices=self._prices,
+            use_cache=use_cache,
         )
 
-    def run(self, request: ChatCompletionRequest, drop_params: object = None) -> ChatCompletion:
-        action = self._first(request, drop_params)
+    def run(
+        self, request: ChatCompletionRequest, drop_params: object = None, use_cache: bool = True
+    ) -> ChatCompletion:
+        action = self._first(request, drop_params, use_cache)
         while True:
             step = self.perform(action)
             if isinstance(step, Finished):

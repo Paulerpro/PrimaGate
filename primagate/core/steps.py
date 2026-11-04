@@ -69,6 +69,8 @@ class Dispatch:
     payload_retention: bool = False
     # None for a streamed call, which never uses the Cache.
     cache_key: str | None = None
+    # Set for an answer that must never be replayed, such as one from a degraded route.
+    no_cache: bool = False
     # Bundled prices with the caller's overrides on top; carried so the answer can be priced.
     prices: PriceTable = field(default_factory=lambda: BUNDLED)
 

@@ -11,7 +11,7 @@ from typing_extensions import Unpack
 
 from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
-from primagate.drivers.cache import ResponseCache
+from primagate.drivers.cache import DEFAULT_MAX_ENTRIES, ResponseCache
 from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
@@ -51,6 +51,7 @@ class CallParams(TypedDict, total=False):
     tools: Sequence[Mapping[str, Any]] | None
     response_format: Mapping[str, Any] | type | None
     drop_params: DropParams
+    cache: bool | None
 
 
 class PlainCallParams(CallParams, total=False):
@@ -85,6 +86,7 @@ class PrimaGate:
         payload_retention: bool = False,
         price_overrides: Mapping[str, Mapping[str, float]] | None = None,
         token_counter: TokenCounter | None = None,
+        cache_max_entries: int = DEFAULT_MAX_ENTRIES,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -113,7 +115,7 @@ class PrimaGate:
         # One for both drivers, so a broken tiktoken is tried and reported once per instance.
         self._counting = TokenCounting(token_counter)
         # One for both drivers, so a sync call and an async call can answer each other.
-        self._cache = ResponseCache()
+        self._cache = ResponseCache(_cache_size(cache_max_entries))
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params
@@ -144,9 +146,10 @@ class PrimaGate:
     def _completion(self, params: AnyCallParams) -> ChatCompletion | SyncStream:
         driver = self._get_driver()
         request, drop = _request(params), self._effective_drop_params(params)
+        use_cache = _use_cache(params)
         if request.stream:
             return driver.stream(request, drop)
-        return driver.run(request, drop)
+        return driver.run(request, drop, use_cache)
 
     @overload
     async def acompletion(self, **params: Unpack[StreamCallParams]) -> AsyncStream: ...
@@ -165,9 +168,10 @@ class PrimaGate:
     async def _acompletion(self, params: AnyCallParams) -> ChatCompletion | AsyncStream:
         driver = self._get_async_driver()
         request, drop = _request(params), self._effective_drop_params(params)
+        use_cache = _use_cache(params)
         if request.stream:
             return await driver.stream(request, drop)
-        return await driver.run(request, drop)
+        return await driver.run(request, drop, use_cache)
 
     def _effective_drop_params(self, params: AnyCallParams) -> DropParams:
         # Only None means unset, so False and [] switch an inherited opt-in off for one call.
@@ -244,6 +248,23 @@ def _retry_policy(max_retries: object, backoff_base: object, backoff_max: object
     if longest < base:
         raise BadRequestError("backoff_max must not be below backoff_base")
     return RetryPolicy(max_retries, base, longest)
+
+
+def _cache_size(value: object) -> int:
+    # 0 is allowed and means no caching; bool is an int subclass and True here is a mistake.
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise BadRequestError("cache_max_entries must be an integer of 0 or more")
+    return value
+
+
+def _use_cache(params: AnyCallParams) -> bool:
+    # Only None means unset; truthy look-alikes such as 0 or "no" are refused, not guessed at.
+    value = params.get("cache")
+    if value is None:
+        return True
+    if not isinstance(value, bool):
+        raise BadRequestError("cache must be True, False or None")
+    return value
 
 
 def _delay_setting(name: str, value: object) -> float:

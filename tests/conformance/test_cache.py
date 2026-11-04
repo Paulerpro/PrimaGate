@@ -214,3 +214,147 @@ def test_a_call_that_needed_a_retry_is_cached_once_it_succeeds(
     second = call(run.gate, model=GPT, messages=MSGS)
     assert sent == 2 and len(run.sent) == 2
     assert second.metadata is not None and second.metadata.cache_hit is True
+
+
+def test_a_call_that_opts_out_neither_reads_nor_writes(call: Caller) -> None:
+    run = Run({OPENAI: [_answer]})
+    call(run.gate, model=GPT, messages=MSGS)
+    skipped = call(run.gate, model=GPT, messages=MSGS, cache=False)
+    assert len(run.sent) == 2
+    assert skipped.metadata is not None and skipped.metadata.cache_hit is False
+    after = call(run.gate, model=GPT, messages=MSGS)
+    assert len(run.sent) == 2 and after.metadata is not None and after.metadata.cache_hit is True
+
+
+def test_a_call_that_opts_out_leaves_nothing_behind(call: Caller) -> None:
+    run = Run({OPENAI: [_answer]})
+    call(run.gate, model=GPT, messages=MSGS, cache=False)
+    again = call(run.gate, model=GPT, messages=MSGS)
+    assert len(run.sent) == 2
+    assert again.metadata is not None and again.metadata.cache_hit is False
+
+
+def test_an_opted_out_call_gives_the_full_event_story_and_no_cache_event(call: Caller) -> None:
+    handler = Recorder()
+    run = Run({OPENAI: [_answer]}, event_handler=handler)
+    call(run.gate, model=GPT, messages=MSGS)
+    call(run.gate, model=GPT, messages=MSGS, cache=False)
+    assert handler.types == ["dispatch_started", "call_succeeded"] * 2
+
+
+@pytest.mark.parametrize("value", [None, True])
+def test_cache_none_or_true_means_the_cache_is_used(call: Caller, value: bool | None) -> None:
+    run = Run({OPENAI: [_answer]})
+    call(run.gate, model=GPT, messages=MSGS, cache=value)
+    call(run.gate, model=GPT, messages=MSGS, cache=value)
+    assert len(run.sent) == 1
+
+
+@pytest.mark.parametrize("bad", ["no", 0, 1, []])
+def test_a_cache_flag_that_is_not_a_bool_is_refused_before_any_request(
+    call: Caller, bad: Any
+) -> None:
+    run = Run({OPENAI: [_answer]})
+    with pytest.raises(errors.BadRequestError):
+        call(run.gate, model=GPT, messages=MSGS, cache=bad)
+    assert run.sent == []
+
+
+def test_the_cache_holds_at_most_its_maximum_and_evicts_the_least_recently_used(
+    call: Caller,
+) -> None:
+    run = Run({OPENAI: [_answer]}, cache_max_entries=2)
+
+    def ask(text: str) -> bool:
+        before = len(run.sent)
+        result = call(run.gate, model=GPT, messages=[{"role": "user", "content": text}])
+        assert result.metadata is not None
+        assert result.metadata.cache_hit is (len(run.sent) == before)
+        return result.metadata.cache_hit
+
+    assert [ask("a"), ask("b"), ask("a"), ask("c")] == [False, False, True, False]
+    assert ask("a") is True, "a was used last, so it stayed"
+    assert ask("b") is False, "b was the least recently used, so it left"
+
+
+def test_the_default_bound_is_256_answers(call: Caller) -> None:
+    run = Run({OPENAI: [_answer]})
+    for number in range(257):
+        call(run.gate, model=GPT, messages=[{"role": "user", "content": str(number)}])
+    call(run.gate, model=GPT, messages=[{"role": "user", "content": "256"}])
+    assert len(run.sent) == 257
+    call(run.gate, model=GPT, messages=[{"role": "user", "content": "0"}])
+    assert len(run.sent) == 258
+
+
+def test_a_maximum_of_zero_turns_the_cache_off(call: Caller) -> None:
+    run = Run({OPENAI: [_answer]}, cache_max_entries=0)
+    first = call(run.gate, model=GPT, messages=MSGS)
+    second = call(run.gate, model=GPT, messages=MSGS)
+    assert len(run.sent) == 2
+    assert first.metadata is not None and second.metadata is not None
+    assert first.metadata.cache_hit is False and second.metadata.cache_hit is False
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, True, "3", [], float("nan")])
+def test_a_bad_maximum_is_refused_at_setup(bad: Any) -> None:
+    with pytest.raises(errors.BadRequestError):
+        Run({OPENAI: [_answer]}, cache_max_entries=bad)
+
+
+def test_streams_ignore_the_flag_and_the_bound(call: Caller, stream_call: StreamCaller) -> None:
+    run = Run({OPENAI: [_answer]}, cache_max_entries=0)
+    streamed = stream_call(run.gate, model=GPT, messages=MSGS, cache=False)
+    assert streamed.read_error is None and streamed.chunks
+    assert len(run.sent) == 1
+
+
+def test_a_near_repeat_request_is_a_miss(call: Caller) -> None:
+    run = Run({OPENAI: [_answer]})
+    call(run.gate, model=GPT, messages=[{"role": "user", "content": "What is 2+2?"}])
+    near = call(run.gate, model=GPT, messages=[{"role": "user", "content": "What is 2+2??"}])
+    assert len(run.sent) == 2
+    assert near.metadata is not None and near.metadata.cache_hit is False
+
+
+def test_an_opted_out_call_that_needed_a_retry_or_a_fallback_still_writes_nothing(
+    call: Caller, delays: list[float]
+) -> None:
+    retried = Run(
+        {OPENAI: [_status(503), _answer]},
+        provider_routing={GPT: [{"base_url": "https://b.test/v1"}]},
+    )
+    call(retried.gate, model=GPT, messages=MSGS, cache=False)
+    assert len(retried.sent) == 2
+    call(retried.gate, model=GPT, messages=MSGS)
+    assert len(retried.sent) == 3
+
+    fallen = Run({OPENAI: [_status(503)], ANTHROPIC: [_answer]}, **_fallbacks(CLAUDE))
+    call(fallen.gate, model=GPT, messages=MSGS, cache=False)
+    sent = len(fallen.sent)
+    call(fallen.gate, model=GPT, messages=MSGS)
+    assert len(fallen.sent) > sent
+
+
+def test_the_opt_out_is_not_sent_to_the_provider(call: Caller) -> None:
+    run = Run({OPENAI: [_answer]})
+    call(run.gate, model=GPT, messages=MSGS, cache=False)
+    assert b"cache" not in run.sent[0].content
+
+
+def test_a_stream_that_opts_out_leaves_an_existing_entry_alone(
+    call: Caller, stream_call: StreamCaller
+) -> None:
+    run = Run({OPENAI: [_answer]})
+    call(run.gate, model=GPT, messages=MSGS)
+    stream_call(run.gate, model=GPT, messages=MSGS, cache=False)
+    assert len(run.sent) == 2
+    after = call(run.gate, model=GPT, messages=MSGS)
+    assert len(run.sent) == 2 and after.metadata is not None and after.metadata.cache_hit is True
+
+
+def test_a_bad_cache_flag_is_refused_on_a_stream_too(stream_call: StreamCaller) -> None:
+    run = Run({OPENAI: [_answer]})
+    refused = stream_call(run.gate, model=GPT, messages=MSGS, cache="no")
+    assert isinstance(refused.call_error, errors.BadRequestError)
+    assert run.sent == []

@@ -400,9 +400,28 @@ request, never the content, whatever `payload_retention` says.
 Only successful, non-streamed answers are remembered, including one that a fallback model gave, which
 is then served for the same call even after your first choice recovers. Calls made at the same
 time are each sent, because nothing is remembered until the first answer arrives. A stream is never served from memory and
-never saved. The memory is per instance, lives until the instance is gone, and has no size limit
-or off switch yet, so a call you repeat on purpose, such as a high-temperature call that should
-give a different answer each time, is answered from memory too.
+never saved. The memory is per instance and lives until the instance is gone.
+
+To skip the memory for one call, pass `cache=False`. That call is always sent, and its answer is
+not saved. To change how much is kept, set `cache_max_entries` when you create the instance:
+
+```python
+from primagate import PrimaGate
+
+gate = PrimaGate(cache_max_entries=100)
+messages = [{"role": "user", "content": "Say hello in five words."}]
+fresh = gate.completion(model="gpt-4o", messages=messages, cache=False)
+
+print(fresh.choices[0].message.content)
+print("From memory:", fresh.metadata.cache_hit)
+```
+
+The memory holds at most `cache_max_entries` answers, 256 unless you say otherwise. When it is
+full, the answer used least recently is dropped to make room, so an answer you keep reusing
+stays. Set it to `0` to turn the memory off for the whole instance. A near-identical call, such
+as the same prompt with one character changed, is never answered from memory. A stream ignores
+`cache` and the bound. Both limits count answers, not bytes, so very large answers still take
+more memory.
 
 ## Notes
 

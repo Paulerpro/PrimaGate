@@ -221,8 +221,16 @@ def test_readme_documents_token_counting_and_offline_use() -> None:
 
 
 def test_readme_explains_the_cache_and_its_limits() -> None:
-    for phrase in ("cache_hit", "no size limit", "never the content", "streamed"):
+    for phrase in (
+        "cache_hit",
+        "cache=False",
+        "cache_max_entries",
+        "used least recently",
+        "never the content",
+        "streamed",
+    ):
         assert phrase in README, phrase
+    assert "no size limit" not in README
 
 
 def test_the_cache_sample_reports_a_hit(
@@ -232,3 +240,12 @@ def test_the_cache_sample_reports_a_hit(
     calls = _run(sample, monkeypatch)
     assert len(calls) == 1, "the second identical call must not reach the provider"
     assert "From memory: True" in capsys.readouterr().out
+
+
+def test_the_opt_out_sample_is_sent_and_reports_no_hit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "cache=False" in s)
+    calls = _run(sample, monkeypatch)
+    assert len(calls) == 1
+    assert "From memory: False" in capsys.readouterr().out

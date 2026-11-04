@@ -175,7 +175,9 @@ class AsyncDriver:
     async def aclose(self) -> None:
         await self._transport.aclose()
 
-    def _first(self, request: ChatCompletionRequest, drop_params: object) -> steps.Action:
+    def _first(
+        self, request: ChatCompletionRequest, drop_params: object, use_cache: bool = True
+    ) -> steps.Action:
         return start(
             request,
             self._capabilities,
@@ -185,12 +187,13 @@ class AsyncDriver:
             self._fallbacks,
             self._payload_retention,
             prices=self._prices,
+            use_cache=use_cache,
         )
 
     async def run(
-        self, request: ChatCompletionRequest, drop_params: object = None
+        self, request: ChatCompletionRequest, drop_params: object = None, use_cache: bool = True
     ) -> ChatCompletion:
-        action = self._first(request, drop_params)
+        action = self._first(request, drop_params, use_cache)
         while True:
             step = await self.perform(action)
             if isinstance(step, Finished):
