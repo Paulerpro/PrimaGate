@@ -188,3 +188,39 @@ def test_an_override_survives_a_retry(call: Caller, delays: list[float]) -> None
 def test_overrides_are_checked_when_the_instance_is_made() -> None:
     with pytest.raises(errors.BadRequestError, match="price_overrides"):
         PrimaGate(price_overrides={"gpt-4o": {"input": -1, "output": 1}})
+
+
+def _bound_price(model: str, **price: float) -> dict[str, Any]:
+    return {"tier_bindings": {"SMALL": {"model": model, "pricing": price}}}
+
+
+def test_a_binding_price_replaces_the_bundled_price(call: Caller) -> None:
+    run = Run({OPENAI: [_answer_with()]}, **_bound_price(GPT, input=10.0, output=20.0))
+    result = call(run.gate, model=GPT, messages=MSGS)
+    assert result.metadata is not None and result.metadata.cost is not None
+    assert result.metadata.cost.total == pytest.approx(0.01 + 0.01)
+
+
+def test_a_caller_override_beats_a_binding_price(call: Caller) -> None:
+    run = Run(
+        {OPENAI: [_answer_with()]},
+        price_overrides={GPT: {"input": 100.0, "output": 200.0}},
+        **_bound_price(GPT, input=10.0, output=20.0),
+    )
+    result = call(run.gate, model=GPT, messages=MSGS)
+    assert result.metadata is not None and result.metadata.cost is not None
+    assert result.metadata.cost.total == pytest.approx(0.2)
+
+
+def test_a_binding_prices_a_model_the_bundle_does_not_know(call: Caller) -> None:
+    run = Run({OPENAI: [_answer_with()]}, **_bound_price("mystery-1", input=1.0, output=1.0))
+    result = call(run.gate, model="mystery-1", messages=MSGS)
+    assert result.metadata is not None
+    assert result.metadata.unknown_model is False and result.metadata.cost is not None
+
+
+def test_a_binding_with_an_unknown_price_leaves_the_bundled_price(call: Caller) -> None:
+    run = Run({OPENAI: [_answer_with()]}, **_bound_price(GPT, input=10.0))
+    result = call(run.gate, model=GPT, messages=MSGS)
+    assert result.metadata is not None and result.metadata.cost is not None
+    assert result.metadata.cost.total == pytest.approx(0.0075)

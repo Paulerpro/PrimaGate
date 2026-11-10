@@ -5,6 +5,7 @@ import math
 import secrets
 import threading
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Literal, Required, TypedDict, cast, overload
 
 import httpx2
@@ -16,9 +17,11 @@ from primagate.drivers.cache import DEFAULT_MAX_ENTRIES, ResponseCache
 from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
+    layer_prices,
     parse_fallbacks,
     parse_price_overrides,
     parse_provider_routing,
+    parse_tier_bindings,
 )
 from primagate.drivers.sync import SyncDriver, SyncStream
 from primagate.drivers.tokens import TokenCounter, TokenCounting
@@ -86,6 +89,7 @@ class PrimaGate:
         event_handler: EventHandler | None = None,
         payload_retention: bool = False,
         price_overrides: Mapping[str, Mapping[str, float]] | None = None,
+        tier_bindings: Mapping[str, Mapping[str, Any]] | None = None,
         token_counter: TokenCounter | None = None,
         cache_max_entries: int = DEFAULT_MAX_ENTRIES,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
@@ -106,8 +110,13 @@ class PrimaGate:
             raise BadRequestError("event_handler must be a plain function taking one event")
         if not isinstance(payload_retention, bool):
             raise BadRequestError("payload_retention must be True or False")
-        # Validated here so a bad price fails at setup, not when a response is priced.
-        self._price_overrides = parse_price_overrides(price_overrides)
+        # Validated here so a bad binding fails at setup; read-only so the stored set cannot drift.
+        self._tier_bindings = MappingProxyType(parse_tier_bindings(tier_bindings))
+        # Validated here so a bad price fails at setup, not when a response is priced. A binding's
+        # price sits between the caller's own and the bundled table, so a caller override wins.
+        self._price_overrides = layer_prices(
+            self._tier_bindings, parse_price_overrides(price_overrides)
+        )
         # An async counter would hand back a coroutine instead of a count.
         if token_counter is not None and (
             not callable(token_counter) or inspect.iscoroutinefunction(token_counter)

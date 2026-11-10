@@ -50,8 +50,10 @@ def test_every_error_class_is_exported_from_the_package_root() -> None:
     assert "UnsupportedParamsError" in classes
     for name in classes:
         assert getattr(primagate, name) is getattr(errors, name), name
-    # The root exports the errors and the entry points, nothing else yet.
-    others = {"PrimaGate", "__version__", "acompletion", "completion"} | set(events.EXPORTED)
+    # The root exports the errors, the events, the entry points and the one value for a fact a
+    # provider does not disclose.
+    others = {"PrimaGate", "__version__", "acompletion", "completion", "Unknown", "UNKNOWN"}
+    others |= set(events.EXPORTED)
     assert set(primagate.__all__) == set(classes) | others
 
 
@@ -253,6 +255,31 @@ def test_the_trace_sample_runs_and_finds_the_event_it_was_given(
     calls = _run(sample, monkeypatch)
     assert len(calls) == 1
     assert "routing_decision req-example profile-1 fingerprint-1" in capsys.readouterr().out
+
+
+def test_readme_explains_tier_bindings() -> None:
+    for phrase in (
+        "tier_bindings",
+        "SMALL",
+        "MEDIUM",
+        "POWERFUL",
+        "UNKNOWN",
+        "not part of PrimaGate yet",
+        "price_overrides",
+        "per million tokens",
+        "not applied to any call",
+        "supported_features",
+    ):
+        assert phrase in README, phrase
+
+
+def test_the_binding_sample_runs_and_prints_the_unknown_value(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "tier_bindings" in s)
+    assert len(_run(sample, monkeypatch)) == 1
+    out = capsys.readouterr().out
+    assert "an undisclosed price is UNKNOWN" in out and "cost known: True" in out
 
 
 def test_the_cache_sample_reports_a_hit(

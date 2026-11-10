@@ -492,6 +492,55 @@ secret that each `PrimaGate` instance creates for itself: it shows that two hits
 request, and it cannot be used to check a guess at a prompt. It changes every time the process
 starts, so do not store it.
 
+### 14. Declare what each Tier means
+
+Tier Routing, which is not part of PrimaGate yet, will send each request to the cheapest of three
+Tiers that can do the job: `SMALL`, `MEDIUM` and `POWERFUL`, in that order of strength. You can
+already say which model plays each Tier, how to call it, what it can do and what it costs. Only
+those three labels are accepted, exactly as written.
+
+```python
+from primagate import UNKNOWN, PrimaGate
+
+gate = PrimaGate(
+    tier_bindings={
+        "SMALL": {
+            "model": "gpt-4o-mini",
+            "settings": {"temperature": 0.2, "max_tokens": 512},
+            "limits": {"context_window": 128000, "supported_features": ["tools", "streaming"]},
+            "pricing": {"input": 0.15, "output": 0.6},
+        },
+        "MEDIUM": {"model": "claude-sonnet-5-5"},
+    }
+)
+
+response = gate.completion(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+print("cost known:", response.metadata.cost is not None)
+print("an undisclosed price is", UNKNOWN)
+```
+
+A binding names its `model` (a bare name or `provider/model`) and may add:
+
+- `settings`: `temperature`, `top_p`, `max_tokens`, `seed` and `stop`, which are your own choices,
+  so one you do not set is simply absent.
+- `limits`: `context_window`, `max_output_tokens` and `supported_features`, a list drawn from
+  `tools`, `structured_output`, `images` and `streaming`.
+- `pricing`: `input` and `output`, in US dollars per million tokens.
+
+A fact the provider does not publish, such as a context window or a price you leave out, is
+stored as the single value `UNKNOWN` and is never left out or replaced by `None`. You can also
+write the string `"unknown"` to say so on purpose.
+
+Declaring a binding is only a declaration for now. Its `settings` and `limits` are stored and
+checked but not applied to any call, and ordinary calls behave as before, with one exception: a
+price in a binding is used for cost estimates (step 10) for that model, after any
+`price_overrides` you pass and before the bundled table. A price needs both `input` and `output`
+to count, and one model may not be given two different prices.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)
