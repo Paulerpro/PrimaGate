@@ -282,6 +282,32 @@ def test_the_binding_sample_runs_and_prints_the_unknown_value(
     assert "an undisclosed price is UNKNOWN" in out and "cost known: True" in out
 
 
+def test_readme_explains_the_policy() -> None:
+    for phrase in (
+        "policy=",
+        "enabled_tiers",
+        "confidence_threshold",
+        "context_token_budget",
+        "interim_binding",
+        "cost_preference",
+        "ambiguous_context_default",
+        "max_concurrent_analyzer_calls",
+        "spending_ceiling",
+        "never picks one for you",
+        "it does not change any call",
+        "has no effect yet",
+    ):
+        assert phrase in README, phrase
+
+
+def test_the_policy_sample_runs_and_answers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "policy=" in s)
+    assert len(_run(sample, monkeypatch)) == 1
+    assert REPLY in capsys.readouterr().out
+
+
 def test_the_cache_sample_reports_a_hit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

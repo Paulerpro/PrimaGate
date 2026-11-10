@@ -541,6 +541,64 @@ price in a binding is used for cost estimates (step 10) for that model, after an
 `price_overrides` you pass and before the bundled table. A price needs both `input` and `output`
 to count, and one model may not be given two different prices.
 
+### 15. Declare your routing rules
+
+Tier Routing, which is not part of PrimaGate yet, will follow a Policy that you write once at setup.
+The fields that depend on your app and your Analyzer have no default, so setup refuses a Policy that
+leaves them out; the optional fields below have the defaults they name. A Policy can only enable
+Tiers that have a binding (step 14). Tier labels are exact upper-case words, and naming one twice is
+refused.
+
+```python
+from primagate import PrimaGate
+
+gate = PrimaGate(
+    tier_bindings={
+        "SMALL": {"model": "gpt-4o-mini"},
+        "MEDIUM": {"model": "gpt-4o"},
+    },
+    policy={
+        "enabled_tiers": ["SMALL", "MEDIUM"],
+        "confidence_threshold": 0.8,
+        "context_token_budget": 2000,
+        "interim_binding": "MEDIUM",
+    },
+)
+
+response = gate.completion(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+The call above names a plain model, so the Policy is not involved in it yet.
+
+Required:
+
+- `enabled_tiers`: the Tiers routing may use, from `SMALL`, `MEDIUM` and `POWERFUL`.
+- `confidence_threshold`: above 0 and up to 1. How sure the Analyzer must be before its choice is
+  taken. Analyzers differ, so tune it for yours.
+- `context_token_budget`: how many tokens of recent conversation the Analyzer may read.
+- `interim_binding`: the Tier (not the binding itself) used when routing cannot decide, such as while your app is still being
+  learned. You name it yourself. `MEDIUM` is a sensible choice, or the cheapest enabled Tier when
+  `MEDIUM` is not enabled, but PrimaGate never picks one for you.
+
+Optional:
+
+- `cost_preference`: `balanced` (the default), `cost_conscious` or `capability_first`. Either of the
+  last two is accepted, with one warning in the `primagate` log each time a `PrimaGate` is created.
+  It has no effect yet, because nothing routes.
+- `ambiguous_context_default`: the Tier used when the Analyzer is not confident enough. `MEDIUM` when
+  you leave it out, so a Policy that does not enable `MEDIUM` must set it.
+- `max_concurrent_analyzer_calls`: a cap on routing decisions in flight at once. Left out, no cap is
+  set yet; its default will be chosen when the cap is built.
+- `spending_ceiling`: US dollars. A warning, never a limit.
+
+`interim_binding` and `ambiguous_context_default` must name enabled Tiers. A Policy is fixed once
+set up, so one request can never see its rules change halfway. Today a Policy only checks your setup:
+it does not change any call.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

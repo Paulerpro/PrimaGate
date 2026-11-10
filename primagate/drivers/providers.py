@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -10,11 +11,13 @@ from typing import Any, Protocol
 
 from primagate.adapters import anthropic, openai
 from primagate.core import fallbacks as core_fallbacks
+from primagate.core import policy as core_policy
 from primagate.core import tiers as core_tiers
 from primagate.core.call import parse_drop_params, resolve_model
 from primagate.core.ports import Adapter
 from primagate.core.prices import Price
 from primagate.schema.errors import AuthenticationError, BadRequestError
+from primagate.schema.policy import Policy
 from primagate.schema.tiers import (
     FEATURES,
     UNKNOWN,
@@ -25,6 +28,8 @@ from primagate.schema.tiers import (
     Unknown,
 )
 from primagate.schema.wire import Endpoint, Fallbacks, ProviderSettings
+
+logger = logging.getLogger("primagate")
 
 
 @dataclass(frozen=True)
@@ -232,6 +237,17 @@ def layer_prices(
 ) -> dict[tuple[str, str], Price]:
     """The prices that replace the bundled table: binding prices, then the caller's own on top."""
     return {**core_tiers.binding_prices(bindings.values()), **overrides}
+
+
+def parse_policy(value: object, bindings: Mapping[Tier, TierBinding]) -> Policy | None:
+    """Validate the Policy declaration; nothing declared means Tier Routing is not configured."""
+    if value is None:
+        return None
+    policy, advisories = core_policy.build_policy(value, bindings)
+    for advice in advisories:
+        # Setup has no request to hang an event on, so the advisory goes to the logger.
+        logger.warning(advice)
+    return policy
 
 
 _BINDING_FIELDS = frozenset({"model", "settings", "limits", "pricing"})

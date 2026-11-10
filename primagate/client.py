@@ -19,6 +19,7 @@ from primagate.drivers.providers import (
     check_provider_names,
     layer_prices,
     parse_fallbacks,
+    parse_policy,
     parse_price_overrides,
     parse_provider_routing,
     parse_tier_bindings,
@@ -90,6 +91,7 @@ class PrimaGate:
         payload_retention: bool = False,
         price_overrides: Mapping[str, Mapping[str, float]] | None = None,
         tier_bindings: Mapping[str, Mapping[str, Any]] | None = None,
+        policy: Mapping[str, Any] | None = None,
         token_counter: TokenCounter | None = None,
         cache_max_entries: int = DEFAULT_MAX_ENTRIES,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
@@ -112,6 +114,8 @@ class PrimaGate:
             raise BadRequestError("payload_retention must be True or False")
         # Validated here so a bad binding fails at setup; read-only so the stored set cannot drift.
         self._tier_bindings = MappingProxyType(parse_tier_bindings(tier_bindings))
+        # After the bindings, since a Policy may only enable Tiers that have one.
+        self._policy = parse_policy(policy, self._tier_bindings)
         # Validated here so a bad price fails at setup, not when a response is priced. A binding's
         # price sits between the caller's own and the bundled table, so a caller override wins.
         self._price_overrides = layer_prices(
