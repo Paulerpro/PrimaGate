@@ -33,6 +33,7 @@ from primagate.drivers.providers import (
 )
 from primagate.drivers.tokens import TokenCounting
 from primagate.schema.errors import PrimaGateError
+from primagate.schema.policy import TierRouting
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
 from primagate.schema.wire import (
     DEFAULT_RETRY,
@@ -126,6 +127,7 @@ class SyncDriver:
         price_overrides: PriceTable | None = None,
         counting: TokenCounting | None = None,
         cache: ResponseCache | None = None,
+        tier_routing: TierRouting | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -138,6 +140,7 @@ class SyncDriver:
         self._prices = {**BUNDLED, **(price_overrides or {})}
         self._counting = counting or TokenCounting()
         self._cache = cache or ResponseCache()
+        self._tier_routing = tier_routing
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -156,6 +159,7 @@ class SyncDriver:
         price_overrides: PriceTable | None = None,
         counting: TokenCounting | None = None,
         cache: ResponseCache | None = None,
+        tier_routing: TierRouting | None = None,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -169,6 +173,7 @@ class SyncDriver:
             price_overrides=price_overrides,
             counting=counting,
             cache=cache,
+            tier_routing=tier_routing,
         )
 
     def close(self) -> None:
@@ -188,6 +193,7 @@ class SyncDriver:
             prices=self._prices,
             use_cache=use_cache,
             cache_salt=self._cache.salt,
+            tier_routing=self._tier_routing,
         )
 
     def run(

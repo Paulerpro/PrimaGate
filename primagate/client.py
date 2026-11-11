@@ -27,6 +27,7 @@ from primagate.drivers.providers import (
 from primagate.drivers.sync import SyncDriver, SyncStream
 from primagate.drivers.tokens import TokenCounter, TokenCounting
 from primagate.schema.errors import BadRequestError, PrimaGateError
+from primagate.schema.policy import TierRouting
 from primagate.schema.types import (
     ChatCompletion,
     ChatCompletionRequest,
@@ -116,6 +117,10 @@ class PrimaGate:
         self._tier_bindings = MappingProxyType(parse_tier_bindings(tier_bindings))
         # After the bindings, since a Policy may only enable Tiers that have one.
         self._policy = parse_policy(policy, self._tier_bindings)
+        # Handed to the drivers whole, so one call sees one Policy and one set of bindings.
+        self._tier_routing = (
+            TierRouting(self._policy, self._tier_bindings) if self._policy is not None else None
+        )
         # Validated here so a bad price fails at setup, not when a response is priced. A binding's
         # price sits between the caller's own and the bundled table, so a caller override wins.
         self._price_overrides = layer_prices(
@@ -225,6 +230,7 @@ class PrimaGate:
                     price_overrides=self._price_overrides,
                     counting=self._counting,
                     cache=self._cache,
+                    tier_routing=self._tier_routing,
                 )
             return self._driver
 
@@ -245,6 +251,7 @@ class PrimaGate:
                     price_overrides=self._price_overrides,
                     counting=self._counting,
                     cache=self._cache,
+                    tier_routing=self._tier_routing,
                 )
             return self._async_driver
 

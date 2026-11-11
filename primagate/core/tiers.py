@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable
 
 from primagate.core.prices import Price
@@ -41,3 +42,19 @@ def binding_prices(bindings: Iterable[TierBinding]) -> dict[tuple[str, str], Pri
                     f"tier_bindings give model '{binding.model_id}' two different prices"
                 )
     return prices
+
+
+def narrowed(declared: Capabilities, binding: TierBinding | None) -> Capabilities:
+    """The adapter's capabilities as one Tier's model can use them.
+
+    Features go through `effective_features`, so the Tier's limits can remove a feature but never
+    add one; hints the provider cannot honor stay as declared.
+    """
+    kept = effective_features(declared, binding)
+    return dataclasses.replace(
+        declared,
+        tools="tools" in kept,
+        structured_output="structured_output" in kept,
+        images="images" in kept,
+        streaming="streaming" in kept,
+    )

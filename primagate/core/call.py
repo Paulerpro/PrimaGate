@@ -35,6 +35,7 @@ from primagate.core.steps import (
     Sleep,
     SleepOutcome,
 )
+from primagate.core.tiers import narrowed
 from primagate.schema import events
 from primagate.schema.errors import (
     AttemptsExhaustedError,
@@ -42,6 +43,7 @@ from primagate.schema.errors import (
     PrimaGateError,
     UnsupportedParamsError,
 )
+from primagate.schema.policy import TIER_ROUTING_ALIAS, TierRouting
 from primagate.schema.types import (
     Attempt,
     ChatCompletion,
@@ -194,6 +196,61 @@ def _build(
     )
 
 
+def _route_tier(
+    request: ChatCompletionRequest,
+    capabilities: Mapping[str, Capabilities],
+    drops: DropPolicy,
+    routes: Mapping[tuple[str, str], tuple[Endpoint, ...]],
+    retry: RetryPolicy,
+    tiers: TierRouting | None,
+) -> Dispatch:
+    """The Compatibility Filter for Tier Routing, and the dispatch when only one Tier can serve.
+
+    Each enabled Tier goes through `_build`, the check the plain path and the Fallback List use
+    too, with the adapter's capabilities narrowed by that Tier's binding, so all three agree on
+    what a model can do and on dropping before filtering.
+    """
+    if tiers is None:
+        raise BadRequestError(
+            f"model '{TIER_ROUTING_ALIAS}' is the Tier Routing alias; "
+            "declare tier_bindings and a policy before using it"
+        )
+    able: list[Dispatch] = []
+    lacking: list[str] = []
+    for tier in tiers.policy.enabled_tiers:
+        binding = tiers.bindings[tier]
+        provider, model = binding.provider, binding.model_id
+        declared = capabilities.get(provider)
+        seen_by_tier = (
+            capabilities
+            if declared is None
+            else {
+                **capabilities,
+                provider: narrowed(declared, binding),
+            }
+        )
+        try:
+            able.append(_build(request, provider, model, seen_by_tier, drops, routes, retry))
+        except UnsupportedParamsError as reason:
+            # Only a missing feature means "this Tier cannot take it"; anything else is a fault
+            # to report as it is, not to hide behind a feature message.
+            lacking.append(f"{tier.name} ({provider}/{model}): {reason.message}")
+    # After the filter, so a model removed by one Tier's limits can still serve under another's.
+    first_per_model: dict[tuple[str, str], Dispatch] = {}
+    for built in able:
+        first_per_model.setdefault((built.provider, built.request.model), built)
+    unique = list(first_per_model.values())
+    if not unique:
+        raise UnsupportedParamsError("No enabled Tier can take this request. " + "; ".join(lacking))
+    if len(unique) > 1:
+        names = ", ".join(f"{d.provider}/{d.request.model}" for d in unique)
+        raise PrimaGateError(
+            f"{len(unique)} Tiers can take this request ({names}); choosing between them needs "
+            "the Analyzer, which is not part of PrimaGate yet"
+        )
+    return unique[0]
+
+
 def first_action(
     request: ChatCompletionRequest,
     capabilities: Mapping[str, Capabilities],
@@ -201,9 +258,12 @@ def first_action(
     routing: Mapping[tuple[str, str], tuple[Endpoint, ...]] | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
     fallbacks: Fallbacks = NO_FALLBACKS,
+    tier_routing: TierRouting | None = None,
 ) -> Action:
     routes = routing or {}
     try:
+        if request.model == TIER_ROUTING_ALIAS:
+            return _route_tier(request, capabilities, policy, routes, retry, tier_routing)
         provider, model = resolve_model(request.model)
         first = _build(request, provider, model, capabilities, policy, routes, retry)
     except PrimaGateError as err:
@@ -362,6 +422,7 @@ def start(
     prices: PriceTable | None = None,
     use_cache: bool = True,
     cache_salt: bytes = b"",
+    tier_routing: TierRouting | None = None,
 ) -> Action:
     """The first action of a call: ask for its request id, then announce and begin.
 
@@ -369,27 +430,49 @@ def start(
     so no later stage can leak it.
     """
 
-    def begin(request_id: str) -> Action:
-        first = first_action(request, capabilities, policy, routing, retry, fallbacks)
+    # A stream never touches the Cache, and a call may opt out of it.
+    cacheable = use_cache and not request.stream
+
+    def begin(request_id: str, key: str | None = None, read_already: bool = False) -> Action:
+        first = first_action(request, capabilities, policy, routing, retry, fallbacks, tier_routing)
         if isinstance(first, Dispatch):
             first = dataclasses.replace(
                 first, request_id=request_id, payload_retention=payload_retention
             )
             if prices is not None:
                 first = dataclasses.replace(first, prices=prices)
-            if request.stream or not use_cache:
+            if not cacheable:
                 return Emit((_started(first),), first)
-            # Read only once the request is known to be valid, so an invalid one still raises.
-            key = cache_key(request, policy, cache_salt)
+            if not read_already:
+                # Read only once the request is known to be valid, so an invalid one still raises.
+                key = cache_key(request, policy, cache_salt)
             if key is None:
                 return Emit((_started(first),), first)
             first = dataclasses.replace(first, cache_key=key)
+            if read_already:
+                return Emit((_started(first),), first)
             return CacheRead(key, lambda read: _after_read(first, read))
         if isinstance(first, Raise):
             return Emit((_call_failed(request_id, first.error),), first)
         return first
 
-    return NewId(begin)
+    def begin_routed(request_id: str) -> Action:
+        # A hit returns before the Tier is chosen, so it never depends on the filter or, later, on
+        # an Analyzer. Anything a past answer was cached for would pass the filter again.
+        key = cache_key(request, policy, cache_salt)
+        if key is None:
+            return begin(request_id)
+
+        def after(read: CacheReadOutcome) -> Action:
+            if read.response is None:
+                return begin(request_id, key, read_already=True)
+            hit = dataclasses.replace(read.response, metadata=Metadata(cache_hit=True))
+            return Emit((events.CacheHit(request_id, request.model, key),), Return(hit))
+
+        return CacheRead(key, after)
+
+    routed = request.model == TIER_ROUTING_ALIAS and tier_routing is not None and cacheable
+    return NewId(begin_routed if routed else begin)
 
 
 def advance(action: Action, outcome: Outcome) -> Action:

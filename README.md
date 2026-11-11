@@ -599,6 +599,49 @@ Optional:
 set up, so one request can never see its rules change halfway. Today a Policy only checks your setup:
 it does not change any call.
 
+### 16. Ask for Tier Routing
+
+Pass `TIER_ROUTING_ALIAS` (the string `"primagate/auto"`) as `model=` to ask for Tier Routing. Any
+other model name is a plain call and skips it. The alias needs `tier_bindings` and a `policy`
+(steps 14 and 15); without them the call is refused before anything is sent.
+
+```python
+from primagate import TIER_ROUTING_ALIAS, PrimaGate
+
+gate = PrimaGate(
+    tier_bindings={"MEDIUM": {"model": "gpt-4o"}},
+    policy={
+        "enabled_tiers": ["MEDIUM"],
+        "confidence_threshold": 0.8,
+        "context_token_budget": 2000,
+        "interim_binding": "MEDIUM",
+    },
+)
+
+response = gate.completion(
+    model=TIER_ROUTING_ALIAS,
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+Before anything is sent, PrimaGate removes every enabled Tier whose model cannot do what the
+request needs. It uses the same rules as a plain call, including `drop_params` (step 6), and a
+Tier's `limits` can only take features away from what its provider offers, never add them:
+
+- If no Tier can take the request, for example an image when none of them handles images, the call
+  fails at once with an `UnsupportedParamsError` that names each Tier and what it lacks.
+- If exactly one Tier can, the call goes to that Tier's model.
+- If two or more can, PrimaGate cannot yet choose between them: the choice is the Analyzer's job,
+  and the Analyzer is not part of PrimaGate yet. The call fails with a `PrimaGateError` saying so,
+  and nothing is sent. So with several Tiers enabled, alias calls only work when the request's
+  needs leave one of them.
+
+A repeat of an identical alias call is answered from memory (step 12) before any of this runs, as
+long as caching is on for that call; a stream never is. Two limits of this release: the response does
+not yet record which Tier answered (`attempt_chain` shows the model), and a fallback list
+is not applied to alias calls yet. The alias cannot be used in a fallback list.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from primagate.schema.policy import TIER_ROUTING_ALIAS
 from primagate.schema.wire import Fallbacks
 
 # Names that mean Tier Routing rather than a concrete model; a fallback may not name one, so a
-# fallback can never re-enter Tier Routing. Filled in where the alias is defined.
-RESERVED_MODEL_NAMES: frozenset[str] = frozenset()
+# fallback can never re-enter Tier Routing.
+RESERVED_MODEL_NAMES: frozenset[str] = frozenset({TIER_ROUTING_ALIAS})
 
 
 def fallback_candidates(

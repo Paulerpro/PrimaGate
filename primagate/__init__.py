@@ -31,6 +31,7 @@ from primagate.schema.events import (
     RetryScheduled,
     RoutingDecision,
 )
+from primagate.schema.policy import TIER_ROUTING_ALIAS
 from primagate.schema.tiers import UNKNOWN, Unknown
 
 __version__ = "0.1.0"
@@ -39,6 +40,7 @@ __version__ = "0.1.0"
 drop_params: bool | list[str] | None = None
 
 __all__ = [
+    "TIER_ROUTING_ALIAS",
     "UNKNOWN",
     "APIConnectionError",
     "APIError",

@@ -53,6 +53,7 @@ def test_every_error_class_is_exported_from_the_package_root() -> None:
     # The root exports the errors, the events, the entry points and the one value for a fact a
     # provider does not disclose.
     others = {"PrimaGate", "__version__", "acompletion", "completion", "Unknown", "UNKNOWN"}
+    others |= {"TIER_ROUTING_ALIAS"}
     others |= set(events.EXPORTED)
     assert set(primagate.__all__) == set(classes) | others
 
@@ -305,6 +306,26 @@ def test_the_policy_sample_runs_and_answers(
 ) -> None:
     sample = next(s for s in SAMPLES if "policy=" in s)
     assert len(_run(sample, monkeypatch)) == 1
+    assert REPLY in capsys.readouterr().out
+
+
+def test_readme_explains_the_alias() -> None:
+    for phrase in (
+        "TIER_ROUTING_ALIAS",
+        "primagate/auto",
+        "the Analyzer is not part of PrimaGate yet",
+        "names each Tier and what it lacks",
+        "cannot be used in a fallback list",
+    ):
+        assert phrase in README, phrase
+
+
+def test_the_alias_sample_runs_and_answers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = next(s for s in SAMPLES if "TIER_ROUTING_ALIAS" in s)
+    calls = _run(sample, monkeypatch)
+    assert len(calls) == 1 and calls[0].url.host == "api.openai.com"
     assert REPLY in capsys.readouterr().out
 
 
