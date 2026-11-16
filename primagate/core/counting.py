@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from primagate.schema.types import ChatCompletion, ChatCompletionRequest, Message
 
@@ -16,11 +16,16 @@ def prompt_text(request: ChatCompletionRequest) -> str:
     return _join(request.messages)
 
 
+def messages_text(messages: Sequence[Message]) -> str:
+    """The countable text of some messages, as one string."""
+    return _join(messages)
+
+
 def completion_text(response: ChatCompletion) -> str:
     return _join([choice.message for choice in response.choices])
 
 
-def _join(messages: list[Message]) -> str:
+def _join(messages: Sequence[Message]) -> str:
     parts: list[str] = []
     for message in messages:
         parts.extend(_content(message.content))
