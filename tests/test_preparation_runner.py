@@ -17,7 +17,13 @@ from primagate.drivers.preparation import (
 from primagate.drivers.providers import parse_tier_bindings
 from primagate.schema import events
 from primagate.schema.policy import TIER_ROUTING_ALIAS, TierRouting
-from primagate.schema.profile import PrepState, ProfileSources
+from primagate.schema.profile import (
+    PROFILE_SCHEMA_VERSION,
+    PrepState,
+    Profile,
+    ProfileContent,
+    ProfileSources,
+)
 from primagate.schema.types import ChatCompletion, ChatCompletionRequest, Choice, Message
 from primagate.schema.wire import Capabilities
 
@@ -64,7 +70,7 @@ def test_fingerprints_are_kept_apart(runner: PreparationRunner) -> None:
 
 def test_ready_never_starts_again(runner: PreparationRunner, clock: Clock) -> None:
     runner.try_start(FP)
-    runner.finish(FP, PrepState.READY)
+    runner.finish(FP, PrepState.READY, profile=READY)
     clock.now += 10 * PREP_RESTART_COOLDOWN
     assert runner.try_start(FP) is False
     assert runner.state(FP) is PrepState.READY
@@ -132,11 +138,46 @@ def test_twenty_threads_start_exactly_one(runner: PreparationRunner) -> None:
     assert won.count(True) == 1 and len(won) == 20
 
 
+def test_the_outcome_hands_a_call_the_state_and_the_ready_profile(
+    runner: PreparationRunner,
+) -> None:
+    # Nothing known yet, as for a closed runner or an abandoned start: no Profile is coming.
+    assert runner.outcome(FP, False) == steps.StartOutcome(False, PrepState.PREPARING)
+    assert runner.try_start(FP)
+    assert runner.outcome(FP, True) == steps.StartOutcome(True, PrepState.PREPARING)
+    runner.finish(FP, PrepState.READY, profile=READY)
+    # Kept in memory, so serving it reads no store.
+    assert runner.outcome(FP, False) == steps.StartOutcome(False, PrepState.READY, READY)
+    # Starting it counts even when the job has already finished, so the call is PREPARING.
+    assert runner.outcome(FP, True) == steps.StartOutcome(True, PrepState.PREPARING)
+
+
+def test_ready_without_its_profile_is_refused_and_changes_nothing(
+    runner: PreparationRunner,
+) -> None:
+    runner.try_start(FP)
+    with pytest.raises(ValueError, match="needs its Profile"):
+        runner.finish(FP, PrepState.READY)
+    assert runner.state(FP) is PrepState.PREPARING
+
+
+def test_a_failed_fingerprint_hands_over_no_profile(
+    runner: PreparationRunner, clock: Clock
+) -> None:
+    runner.try_start(FP)
+    runner.finish(FP, PrepState.FAILED, "provider_error")
+    assert runner.outcome(FP, False) == steps.StartOutcome(False, PrepState.FAILED)
+    clock.now += PREP_RESTART_COOLDOWN
+    assert runner.try_start(FP)
+    runner.finish(FP, PrepState.READY, profile=READY)
+    assert runner.outcome(FP, False).profile == READY
+
+
 def test_abandon_frees_only_a_running_preparation(runner: PreparationRunner) -> None:
     runner.try_start(FP)
     runner.abandon(FP)
     assert runner.state(FP) is None and runner.try_start(FP)
-    runner.finish(FP, PrepState.READY)
+    runner.finish(FP, PrepState.READY, profile=READY)
     runner.abandon(FP)
     assert runner.state(FP) is PrepState.READY
 
@@ -324,16 +365,30 @@ def _tiers(fingerprint: str | None, small: str = "gpt-4o-mini") -> TierRouting:
 CAPS = {"openai": Capabilities(), "anthropic": Capabilities()}
 
 
+READY = Profile(
+    "prep-abc",
+    FP,
+    PROFILE_SCHEMA_VERSION,
+    "2026-11-17T10:00:00+00:00",
+    ProfileContent(purpose="Answers questions about orders.", unknowns=()),
+    "prep-1;gpt-4o-mini",
+)
+
+
 def _drive(
     model: str,
     tiers: TierRouting,
     started: bool = True,
+    state: PrepState = PrepState.READY,
     *,
     caps: dict[str, Capabilities] = CAPS,
     tools: list[dict[str, Any]] | None = None,
     hit: ChatCompletion | None = None,
 ) -> list[steps.Action]:
-    """Run a call through core, answering each ask; the Analyzer declines so it degrades."""
+    """Run a call through core, answering each ask; the Analyzer declines so it degrades.
+
+    A READY answer carries its Profile, as the runner's does.
+    """
     seen: list[steps.Action] = []
     action: steps.Action = start(
         ChatCompletionRequest(
@@ -353,7 +408,9 @@ def _drive(
         elif isinstance(action, steps.Emit):
             outcome = steps.EmitOutcome()
         elif isinstance(action, steps.StartPreparation):
-            outcome = steps.StartOutcome(started)
+            outcome = steps.StartOutcome(
+                started, state, READY if state is PrepState.READY else None
+            )
         elif isinstance(action, steps.Analyze):
             outcome = steps.Declined("over_capacity")
         else:
@@ -376,7 +433,8 @@ def test_a_routed_call_with_sources_asks_once_before_analysing() -> None:
     assert asked.fingerprint == FP
 
 
-def test_the_call_goes_on_the_same_way_whatever_the_answer() -> None:
+@pytest.mark.parametrize("state", list(PrepState))
+def test_the_call_goes_on_the_same_way_whether_or_not_it_started_one(state: PrepState) -> None:
     def shape(actions: list[steps.Action]) -> list[Any]:
         out: list[Any] = []
         for a in actions:
@@ -391,8 +449,8 @@ def test_the_call_goes_on_the_same_way_whatever_the_answer() -> None:
         return out
 
     tiers = _tiers(FP)
-    assert shape(_drive(TIER_ROUTING_ALIAS, tiers, True)) == shape(
-        _drive(TIER_ROUTING_ALIAS, tiers, False)
+    assert shape(_drive(TIER_ROUTING_ALIAS, tiers, True, state)) == shape(
+        _drive(TIER_ROUTING_ALIAS, tiers, False, state)
     )
 
 

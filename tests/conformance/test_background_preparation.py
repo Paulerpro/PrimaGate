@@ -500,17 +500,18 @@ def test_an_async_preparation_cut_off_by_its_loop_ending_waits_out_the_cooldown(
 # --- request in flight keeps what it started with ---
 
 
-def test_routing_reads_no_profile_even_once_one_is_ready(mode: str) -> None:
+def test_only_a_call_that_starts_once_ready_reads_the_profile(mode: str) -> None:
     run = Background(mode, [GOOD])
     pinned = run.gate._tier_routing
     run.run()
     assert run.state is PrepState.READY
     run.run(messages=[{"role": "user", "content": "after ready"}])
     assert run.gate._tier_routing is pinned
-    assert len(run.analyzer_prompts) == 2
-    assert all("Not known about the app" in prompt for prompt in run.analyzer_prompts)
+    # The first call started PREPARING, so only the second asked the Analyzer.
+    (prompt,) = run.analyzer_prompts
+    assert "Purpose: Answers questions about orders." in prompt
     decisions = [e for e in run.handler.seen if isinstance(e, events.RoutingDecision)]
-    assert [d.input_fingerprint for d in decisions] == ["unknown", "unknown"]
+    assert [d.input_fingerprint for d in decisions] == ["unknown", run.fingerprint]
 
 
 class CountingStore(InMemoryProfileStore):

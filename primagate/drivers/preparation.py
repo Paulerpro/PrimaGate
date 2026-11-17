@@ -13,7 +13,7 @@ from primagate.core.preparation import may_start
 from primagate.core.profile import PREP_PROMPT_VERSION
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import PreparationFailed, PreparationStarted, PrepFailureReason
-from primagate.schema.profile import PrepState
+from primagate.schema.profile import PrepState, Profile
 
 # Provisional: long enough that a broken provider or store is not hammered by every request,
 # short enough that a passing fault does not leave the app unprepared for long.
@@ -78,6 +78,9 @@ class PreparationRunner:
         self._clock = clock
         self._lock = threading.Lock()
         self._states: dict[str, PrepState] = {}
+        # Each READY fingerprint's Profile, kept beside its state so a call is handed both at once
+        # and never reads the store.
+        self._profiles: dict[str, Profile] = {}
         # When each FAILED fingerprint failed, and whether it may ever start again.
         self._failures: dict[str, tuple[float, bool]] = {}
         self._closed = False
@@ -109,12 +112,40 @@ class PreparationRunner:
             self._states[fingerprint] = PrepState.PREPARING
             return True
 
+    def outcome(self, fingerprint: str, started: bool) -> steps.StartOutcome:
+        """What a call starting now is served by: the state, and the Profile when READY.
+
+        A call that just started the preparation is PREPARING whatever happens next, so it never
+        depends on how fast the job runs. A fingerprint with no state, because the instance is
+        closed or the start was abandoned, is served as PREPARING too: no Profile is coming yet.
+        """
+        if started:
+            return steps.StartOutcome(True, PrepState.PREPARING)
+        with self._lock:
+            state = self._states.get(fingerprint, PrepState.PREPARING)
+            profile = self._profiles.get(fingerprint) if state is PrepState.READY else None
+        return steps.StartOutcome(False, state, profile)
+
     def finish(
-        self, fingerprint: str, state: PrepState, reason: PrepFailureReason | None = None
+        self,
+        fingerprint: str,
+        state: PrepState,
+        reason: PrepFailureReason | None = None,
+        profile: Profile | None = None,
     ) -> None:
-        """Record how a preparation ended."""
+        """Record how a preparation ended, with the Profile it wrote or loaded when READY.
+
+        READY needs its Profile: without one, every call would be served as preparing, and a
+        READY fingerprint is never prepared again.
+        """
+        if state is PrepState.READY and profile is None:
+            raise ValueError("a READY preparation needs its Profile")
         with self._lock:
             self._states[fingerprint] = state
+            if profile is not None and state is PrepState.READY:
+                self._profiles[fingerprint] = profile
+            else:
+                self._profiles.pop(fingerprint, None)
             if state is PrepState.FAILED:
                 # Sources too large stay too large, so trying again could only pay twice.
                 self._failures[fingerprint] = (self._clock(), reason != "overflow")

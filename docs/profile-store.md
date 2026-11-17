@@ -12,6 +12,11 @@ gate = primagate.PrimaGate(profile_store=primagate.FileProfileStore("profile.jso
 Only background preparation reads or writes the file (README step 18): it reads it once when it
 starts, and writes it when a new Profile is ready.
 
+No call reads the file. After a restart, the first routed call starts that background read, so it
+is still served by the Interim Binding, with a `routing_degraded` event whose reason is
+`preparing`, while the stored Profile is loaded. Later calls use the loaded Profile, with no new
+Analyzer request.
+
 The path may be text or a path object. An empty path, a bytes path, a path object that gives bytes,
 or anything else is refused with `BadRequestError` when the store is built. A relative path is
 fixed against the working directory at that moment, so a later change of directory does not move

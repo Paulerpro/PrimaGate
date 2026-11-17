@@ -397,7 +397,7 @@ def test_a_routed_call_only_asks_for_preparation_and_never_writes_a_profile() ->
             outcome = steps.CountOutcome(1, 1, True)
         elif isinstance(action, steps.StartPreparation):
             assert action.fingerprint == FP
-            outcome = steps.StartOutcome(True)
+            outcome = steps.StartOutcome(True, PrepState.PREPARING)
         else:
             raise AssertionError(type(action).__name__)
         action = advance(action, outcome)

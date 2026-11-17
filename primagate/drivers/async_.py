@@ -349,7 +349,7 @@ class AsyncDriver:
             logger.debug("preparation failed unexpectedly", exc_info=True)
             reason = "provider_error"
         else:
-            runner.finish(fingerprint, prepared.state, progress.reason)
+            runner.finish(fingerprint, prepared.state, progress.reason, prepared.profile)
             return
         # A closed instance stops quietly, even when closing it is what broke the job.
         if runner.is_closed:
@@ -368,12 +368,15 @@ class AsyncDriver:
             or tiers.sources is None
             or tiers.fingerprint != action.fingerprint
         ):
-            return steps.StartOutcome(False)
+            # No preparation can serve this call: no runner, no sources, or a fingerprint that is
+            # not the instance's. Served as preparing, so it never asks the Analyzer without a
+            # Profile.
+            return steps.StartOutcome(False, PrepState.PREPARING)
         sources, fingerprint = tiers.sources, tiers.fingerprint
         started = runner.start_task(
             fingerprint, asyncio.get_running_loop(), lambda: self._job(sources, fingerprint)
         )
-        return steps.StartOutcome(started)
+        return runner.outcome(fingerprint, started)
 
     async def analyze(
         self, model: str, profile: ProfileContent, context: RoutingContext, policy: Policy

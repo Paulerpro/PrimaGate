@@ -9,11 +9,12 @@ from primagate.core.context import RoutingContext
 from primagate.core.counting import messages_text
 from primagate.core.models import resolve_model
 from primagate.core.prices import PriceTable, estimate
+from primagate.core.profile import PREP_PROMPT_VERSION
 from primagate.schema import events
 from primagate.schema.analyzer import Analysis, AnalyzerFailure, AnalyzerUsage, Verdict
 from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.policy import TIER_ROUTING_ALIAS, Policy
-from primagate.schema.profile import ProfileContent
+from primagate.schema.profile import Profile, ProfileContent
 from primagate.schema.tiers import Tier
 from primagate.schema.types import ChatCompletionRequest, Message
 from primagate.schema.wire import Capabilities
@@ -148,21 +149,22 @@ def decision_events(
     *,
     asked: bool | None = None,
     degraded: str | None = None,
+    profile: Profile | None = None,
 ) -> tuple[events.Event, ...]:
     """The events that explain one routing decision, with ids only and never message content.
 
-    No Profile is READY until preparation exists, so its fields say "unknown", as do the prompt
-    versions of steps that did not run. `asked` says whether the Analyzer was actually called,
-    which an analysis that cost nothing cannot tell. `degraded` is the reason the Interim
+    `profile` is the READY Profile the call pinned; without one, its fields say "unknown", as do
+    the prompt versions of steps that did not run. `asked` says whether the Analyzer was actually
+    called, which an analysis that cost nothing cannot tell. `degraded` is the reason the Interim
     Binding was used, when it was.
     """
     if asked is None:
         asked = analysis is not None
     unknown = "unknown"
     fields = {
-        "profile_id": unknown,
-        "input_fingerprint": unknown,
-        "prep_prompt_version": unknown,
+        "profile_id": profile.profile_id if profile else unknown,
+        "input_fingerprint": profile.input_fingerprint if profile else unknown,
+        "prep_prompt_version": _prep_prompt_version(profile.source_ref) if profile else unknown,
         "analyzer_prompt_version": ANALYZER_PROMPT_VERSION if asked else unknown,
         "binding_id": binding_id,
     }
@@ -175,3 +177,10 @@ def decision_events(
     if tier > min(eligible):
         made.append(events.PremiumRoutingSelected(request_id, **fields))
     return tuple(made)
+
+
+def _prep_prompt_version(source_ref: str) -> str:
+    # Preparation writes "<prep prompt version>;<analyzer>". A Profile stored any other way still
+    # matched the fingerprint, which includes the prep prompt version, so the current one applies.
+    version, separator, _ = source_ref.partition(";")
+    return version if separator and version else PREP_PROMPT_VERSION

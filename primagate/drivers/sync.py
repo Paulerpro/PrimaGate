@@ -350,7 +350,7 @@ class SyncDriver:
             runner.finish(fingerprint, PrepState.FAILED)
             raise
         else:
-            runner.finish(fingerprint, prepared.state, progress.reason)
+            runner.finish(fingerprint, prepared.state, progress.reason, prepared.profile)
             return
         # A closed instance stops quietly, even when closing it is what broke the job.
         if runner.is_closed:
@@ -369,10 +369,13 @@ class SyncDriver:
             or tiers.sources is None
             or tiers.fingerprint != action.fingerprint
         ):
-            return steps.StartOutcome(False)
+            # No preparation can serve this call: no runner, no sources, or a fingerprint that is
+            # not the instance's. Served as preparing, so it never asks the Analyzer without a
+            # Profile.
+            return steps.StartOutcome(False, PrepState.PREPARING)
         sources, fingerprint = tiers.sources, tiers.fingerprint
         started = runner.start_thread(fingerprint, lambda: self._job(sources, fingerprint))
-        return steps.StartOutcome(started)
+        return runner.outcome(fingerprint, started)
 
     def analyze(
         self, model: str, profile: ProfileContent, context: RoutingContext, policy: Policy

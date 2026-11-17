@@ -455,9 +455,11 @@ stay:
   decision.
 - `binding_id`: the model binding that was chosen.
 
-Each is always a string. When no Profile is ready yet, the value is `"unknown"`. Tier Routing emits
-these events once a call uses the alias; the sample below hands in one made-up event so it runs
-without an Analyzer, to show how to look one up: index them in your handler, and find the ones for an id when a response looks wrong.
+Each is always a string. `profile_id`, `input_fingerprint` and `prep_prompt_version` name the
+Profile pinned for the call (step 18), even when the call then went to the Interim Binding; when
+none was pinned, they are `"unknown"`. Tier Routing emits these events once a call uses the alias;
+the sample below hands in one made-up event so it runs without an Analyzer, to show how to look one
+up: index them in your handler, and find the ones for an id when a response looks wrong.
 
 ```python
 from collections import defaultdict
@@ -673,8 +675,8 @@ as written, so when the provider changes the model behind an undated alias such 
 the Profile is not prepared again. Name a dated model version if the fingerprint should follow
 the exact model. Prices, Tier Bindings and the rest of the Policy are not part
 of the fingerprint. The first routed request prepares a Profile from the sources in the background
-(step 18), which sends them to the Analyzer's provider. Routing does not read that Profile yet, so
-for now declaring sources changes no call's routing.
+(step 18), which sends them to the Analyzer's provider. Once that Profile is ready, the Analyzer
+reads it to choose a Tier; until then, routed calls go to your `interim_binding` Tier.
 
 ### 16. Ask for Tier Routing
 
@@ -718,9 +720,10 @@ Every alias call is logged as a `routing_decision` event (step 13), and an answe
 threshold also as `low_confidence_downgrade`. A Tier above the cheapest one that could have taken
 the request also logs `premium_routing_selected`. The events carry ids and the `binding_id` (for
 example `MEDIUM:openai/gpt-4o`), never message content. Each call is decided on its own, so each
-step of a tool loop has its own decision. `profile_id` and `input_fingerprint` say `unknown` until
-Profiles exist. The response's `metadata.tier` names the Tier that answered and `metadata.analyzer`
-holds what the Analyzer cost, apart from `metadata.cost`.
+step of a tool loop has its own decision. `profile_id` and `input_fingerprint` say `unknown`
+unless a prepared Profile was pinned for the call (step 18). The response's `metadata.tier` names
+the Tier that answered and `metadata.analyzer` holds what the Analyzer cost, apart from
+`metadata.cost`.
 
 A repeated call that is answered from memory asks nobody: it has no `routing_decision`, and its
 `metadata.tier` and `metadata.analyzer` are empty. Every other alias call with two or more
@@ -730,13 +733,16 @@ model with no known price reports `unknown_model` and no cost, as any model does
 
 When routing cannot choose, your request is not failed. If the Analyzer is unreachable or times
 out, answers in the wrong shape, names a Tier that cannot take the request, the latest turn is
-larger than `context_token_budget`, or the Analyzer cap is reached, the call goes to your
-`interim_binding` Tier instead. That is one dispatch to a worker model, with no second Analyzer
-request (retries and provider routing for that model still apply as for any call), and a
-`routing_degraded` event (step 13) says why with one of these reasons: `provider_error`,
-`malformed_output`, `tier_not_enabled`, `no_conversation`, `over_budget` or `over_capacity` (the cap
-in step 15 was reached). If the `interim_binding` Tier cannot take the request, the nearest Tier
-that can is used, stronger ones first. Because the Interim Tier may sit above the cheapest able
+larger than `context_token_budget`, the Analyzer cap is reached, or your declared sources have no
+prepared Profile yet (step 18), the call goes to your `interim_binding` Tier instead. That is one
+dispatch to a worker model, with no second Analyzer request (retries and provider routing for that
+model still apply as for any call), and a `routing_degraded` event (step 13) says why with one of
+these reasons: `provider_error`, `malformed_output`, `tier_not_enabled`, `no_conversation`,
+`over_budget`, `over_capacity` (the cap in step 15 was reached), `no_analyzer` (no Analyzer is
+set), `analyzer_unavailable` (no adapter is registered for the Analyzer's provider), `preparing`
+(the Profile was still being prepared when the call started) or `preparation_failed` (preparing it
+failed, step 18). If the `interim_binding` Tier cannot take the request, the nearest Tier that can
+is used, stronger ones first. Because the Interim Tier may sit above the cheapest able
 one, `premium_routing_selected` can follow `routing_degraded` for the same call. An answer given
 this way is never stored in the cache (step 12), so the next identical call asks the Analyzer
 again.
@@ -750,8 +756,9 @@ worker model, and you choose it. It runs in your process with your own keys, and
 it only this:
 
 - The Profile of your app: what your instructions, tool descriptions and skill descriptions say
-  about it, once they have been boiled down. Routing does not read the prepared Profile yet, so
-  for now it only says that all of that is unknown. Preparing the Profile (step 18) sends the
+  about it, once they have been boiled down (step 18): its purpose, the kinds of request, the
+  rules its answers follow, what its tools can do, and what the sources leave unclear. Without
+  `profile_sources`, it only says that all of that is unknown. Preparing the Profile sends the
   sources themselves to the Analyzer's provider.
 - A bounded slice of the recent conversation: the latest turn in full, plus at most three earlier
   turns that fit your `context_token_budget` (step 15). That includes the tool calls the assistant
@@ -791,16 +798,40 @@ your own calls.
 - **When it starts.** On an instance with `profile_sources`, the first routed request
   (`model=TIER_ROUTING_ALIAS`) with two or more Tiers able to take it starts it. Plain model calls,
   calls answered from memory and instances without sources never start it. That request does not
-  wait for it and cannot fail because of it: it is routed exactly as before.
+  wait for it and cannot fail because of it.
+- **What it does to routed calls.** Each routed call with two or more Tiers able to take it looks
+  at the preparation once, when it starts, and keeps what it saw to its end:
+  - *Preparing* (including the call that starts it): the call goes to your `interim_binding` Tier
+    with no Analyzer request, and `routing_degraded` says `preparing`.
+  - *Ready*: the Analyzer chooses with the prepared Profile, and the decision events (step 13)
+    carry its `profile_id`, `input_fingerprint` and `prep_prompt_version`.
+  - *Failed*: the call goes to your `interim_binding` Tier with no Analyzer request, and
+    `routing_degraded` says `preparation_failed`, until a later preparation succeeds.
+
+  A call already running when the Profile becomes ready finishes as it started; only calls that
+  start later use it. An answer from the `interim_binding` Tier is never cached, so once the
+  Profile is ready the same request asks the Analyzer. Calls that only one Tier can take, and
+  instances without `profile_sources`, are routed as before. After a restart, the first routed
+  call is served while preparing even when a file store holds a matching Profile: no call reads
+  the store, and the background job loads that Profile for the calls after it.
+
+  So until a Profile is ready, routed calls stay on your `interim_binding` Tier and the Analyzer
+  is never asked. That is the case while preparing; after a failure, until the 10-minute restart
+  succeeds; after an `overflow` failure, until the process restarts; and, in an app that runs a
+  fresh event loop per request or makes one call per process, for good, since preparation never
+  gets to finish. If your Interim Tier is the pricier one, those calls cost more than routed ones
+  would. Each such call logs `routing_degraded` at WARNING; during warm-up that is expected.
 - **How often.** Only one preparation per fingerprint runs at a time, however many requests arrive
   together. Once it is ready it is not prepared again in this process. With a file store, a
-  matching Profile from an earlier run is reused silently: no Analyzer request and no events.
+  matching Profile from an earlier run is loaded silently: no Analyzer request and no preparation
+  events.
 - **When it fails.** A final `preparation_failed` event (step 8) says why. A later routed request
   tries again once 10 minutes have passed since the failure. Sources too large to prepare
   (`overflow`) are not tried again until the process restarts.
 - **Where it runs.** From `acompletion`, it is a task on your event loop. If that loop ends first,
   as when `asyncio.run(...)` returns, the preparation is cut off with nothing written and no event,
-  and it counts as a failure: the 10-minute wait applies before a routed request starts it again.
+  and it counts as a failure: routed calls go to your `interim_binding` Tier, and the 10-minute
+  wait applies before a routed request starts it again.
   An app that runs a fresh event loop per request (`asyncio.run` per request, `async_to_sync`,
   task workers) should make its calls on a long-lived loop, or use `completion`, so preparation
   can finish. From `completion`, it runs on a daemon thread, which never keeps your process from

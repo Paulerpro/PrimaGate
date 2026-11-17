@@ -67,7 +67,7 @@ from primagate.schema.errors import (
     UnsupportedParamsError,
 )
 from primagate.schema.policy import TIER_ROUTING_ALIAS, TierRouting
-from primagate.schema.profile import ProfileContent
+from primagate.schema.profile import PrepState, Profile, ProfileContent
 from primagate.schema.tiers import Tier
 from primagate.schema.types import (
     Attempt,
@@ -482,6 +482,7 @@ def start(
         *,
         asked: bool | None = None,
         degraded: str | None = None,
+        profile: Profile | None = None,
     ) -> Action:
         eligible = [t for t, _ in routing.candidates]
         chosen = dict(routing.candidates)[tier]
@@ -503,6 +504,7 @@ def start(
             analysis,
             asked=asked,
             degraded=degraded,
+            profile=profile,
         )
         return Emit(announced, ready(chosen, request_id, key, read_already))
 
@@ -515,6 +517,7 @@ def start(
         analysis: Analysis | None = None,
         *,
         asked: bool = False,
+        profile: Profile | None = None,
     ) -> Action:
         """Give up on choosing: one dispatch on the Interim Binding, with the reason on record.
 
@@ -523,37 +526,69 @@ def start(
         eligible = tuple(t for t, _ in routing.candidates)
         tier = resolve_tier(routing.tiers.policy.interim_binding, eligible)
         return decided(
-            routing, tier, request_id, analysis, key, read_already, asked=asked, degraded=reason
+            routing,
+            tier,
+            request_id,
+            analysis,
+            key,
+            read_already,
+            asked=asked,
+            degraded=reason,
+            profile=profile,
         )
 
     def analyzing(routing: Routing, request_id: str, key: str | None, read_already: bool) -> Action:
         """Two or more Tiers can serve the request, so the Analyzer chooses between them.
 
-        With sources declared, the call first asks for its Profile to be prepared. It never waits
-        on that and chooses the same way whether or not one started, since it reads no Profile.
+        With sources declared, the call first asks for its Profile to be prepared, and keeps the
+        state it is told for its whole run, so a preparation that ends mid-call changes nothing
+        for it. It never waits on preparation: until a Profile is READY, or once preparation has
+        failed, the Interim Binding serves it without asking the Analyzer, since the Analyzer
+        without a Profile is what declaring sources asked to replace.
         """
         fingerprint = routing.tiers.fingerprint
         if fingerprint is None:
-            return choosing(routing, request_id, key, read_already)
-        return StartPreparation(
-            fingerprint, lambda _: choosing(routing, request_id, key, read_already)
-        )
+            return choosing(routing, request_id, key, read_already, None)
 
-    def choosing(routing: Routing, request_id: str, key: str | None, read_already: bool) -> Action:
+        def pinned(outcome: StartOutcome) -> Action:
+            if outcome.state is PrepState.READY and outcome.profile is not None:
+                return choosing(routing, request_id, key, read_already, outcome.profile)
+            reason = "preparation_failed" if outcome.state is PrepState.FAILED else "preparing"
+            return degrade(routing, reason, request_id, key, read_already)
+
+        return StartPreparation(fingerprint, pinned)
+
+    def choosing(
+        routing: Routing,
+        request_id: str,
+        key: str | None,
+        read_already: bool,
+        profile: Profile | None,
+    ) -> Action:
+        """Ask the Analyzer, with the READY Profile when there is one, else the empty one."""
         tiers = routing.tiers
         eligible = tuple(t for t, _ in routing.candidates)
         # Only Tiers that can take the request are offered, so the answer is always usable.
         narrowed_policy = dataclasses.replace(tiers.policy, enabled_tiers=eligible)
 
         def give_up(reason: str, analysis: Analysis | None = None, asked: bool = False) -> Action:
-            return degrade(routing, reason, request_id, key, read_already, analysis, asked=asked)
+            return degrade(
+                routing,
+                reason,
+                request_id,
+                key,
+                read_already,
+                analysis,
+                asked=asked,
+                profile=profile,
+            )
 
         if tiers.analyzer is None:
             return give_up("no_analyzer")
         view = bounded_context(request, tiers.policy.context_token_budget)
         if isinstance(view, OverBudget):
             return give_up("over_budget")
-        content = ProfileContent(unknowns=PLACEHOLDER_UNKNOWNS)
+        content = profile.content if profile else ProfileContent(unknowns=PLACEHOLDER_UNKNOWNS)
         try:
             begun = begin_analysis(
                 tiers.analyzer,
@@ -575,7 +610,9 @@ def start(
             if isinstance(analysis.outcome, AnalyzerFailure):
                 return give_up(analysis.outcome.reason, analysis, asked=True)
             chosen = resolve_tier(analysis.outcome.tier, eligible)
-            return decided(routing, chosen, request_id, analysis, key, read_already)
+            return decided(
+                routing, chosen, request_id, analysis, key, read_already, profile=profile
+            )
 
         return Analyze(begun, after)
 

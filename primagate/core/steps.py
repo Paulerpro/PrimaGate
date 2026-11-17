@@ -207,8 +207,8 @@ class RecordSpend:
 class StartPreparation:
     """Ask the driver to start preparing the Profile for `fingerprint` in the background.
 
-    Fire-and-forget: the driver answers at once with whether one started, and the call goes on
-    with `resume` without waiting for any of it.
+    Fire-and-forget: the driver answers at once with whether one started, the state after that,
+    and the Profile when READY. The call goes on with `resume` without waiting for any of it.
     """
 
     fingerprint: str
@@ -290,8 +290,13 @@ class SpendOutcome:
 
 @dataclass(frozen=True)
 class StartOutcome:
+    """Where preparation stands as the call starts, which the call keeps to its end."""
+
     # False when one is already running or done for the fingerprint, or may not start again yet.
     started: bool
+    state: PrepState
+    # Handed over with the state, so serving it never reads the store on the request path.
+    profile: Profile | None = None
 
 
 @dataclass(frozen=True)

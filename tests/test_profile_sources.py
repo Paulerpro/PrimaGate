@@ -293,7 +293,7 @@ def _reply(text: str) -> httpx2.Response:
     return httpx2.Response(200, json=body, headers={"date": "Thu, 01 Jan 1970 00:00:01 GMT"})
 
 
-def test_a_routed_call_still_uses_the_empty_profile_and_sends_no_source(call: Caller) -> None:
+def test_a_routed_call_sends_no_source_and_is_served_while_preparing(call: Caller) -> None:
     sent: list[str] = []
     analyzer_prompts: list[str] = []
     seen: list[events.Event] = []
@@ -323,8 +323,8 @@ def test_a_routed_call_still_uses_the_empty_profile_and_sends_no_source(call: Ca
         thread.join(10)
 
     assert gate._tier_routing is pinned
-    (prompt,) = analyzer_prompts
-    assert "Not known about the app" in prompt and "Purpose:" not in prompt
+    # Not READY when the call started, so the Interim Binding served it and nobody was asked.
+    assert analyzer_prompts == []
     for source in (
         SOURCES["instructions"],
         *SOURCES["tool_descriptions"],
@@ -334,3 +334,5 @@ def test_a_routed_call_still_uses_the_empty_profile_and_sends_no_source(call: Ca
     (decision,) = [e for e in seen if isinstance(e, events.RoutingDecision)]
     # Stays unknown until a prepared Profile is served.
     assert decision.input_fingerprint == "unknown"
+    (degraded,) = [e for e in seen if isinstance(e, events.RoutingDegraded)]
+    assert degraded.reason == "preparing"
