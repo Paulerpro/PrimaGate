@@ -217,19 +217,6 @@ def test_an_analyzer_name_is_trimmed_at_setup() -> None:
     assert gate._tier_routing is not None and gate._tier_routing.analyzer == "gpt-4o-mini"
 
 
-def test_an_answer_naming_a_tier_that_cannot_take_the_request_is_a_failure(call: Caller) -> None:
-    bindings = {
-        "SMALL": {"model": "claude-sonnet-5-5"},
-        "MEDIUM": {"model": "gpt-4o"},
-        "POWERFUL": {"model": "gpt-4.1"},
-    }
-    policy = {**POLICY, "enabled_tiers": ["SMALL", "MEDIUM", "POWERFUL"]}
-    run = Run(["SMALL 0.99"], policy=policy, bindings=bindings)
-    with pytest.raises(errors.PrimaGateError, match="tier_not_enabled"):
-        call(run.gate, model=ALIAS, messages=IMAGE_MSGS)
-    assert run.workers == []
-
-
 def test_a_repeat_is_answered_from_memory_without_asking_the_analyzer_again(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -237,29 +224,6 @@ def test_a_repeat_is_answered_from_memory_without_asking_the_analyzer_again(call
     assert second.metadata is not None and second.metadata.cache_hit
     assert len(run.analyzed) == 1 and len(run.decisions) == 1
     assert second.metadata.tier is None and second.metadata.analyzer is None
-
-
-def test_a_failing_analyzer_is_asked_once_and_no_worker_is_called(call: Caller) -> None:
-    down = lambda: httpx2.Response(503, json={"error": {"message": "x", "type": "server_error"}})  # noqa: E731
-    run = Run([down])
-    with pytest.raises(errors.PrimaGateError, match="provider_error"):
-        call(run.gate, model=ALIAS, messages=MSGS)
-    assert len(run.analyzed) == 1 and run.workers == []
-    assert run.handler.types == ["call_failed"]
-
-
-def test_a_malformed_answer_calls_no_worker(call: Caller) -> None:
-    run = Run(["I would pick MEDIUM 0.9"])
-    with pytest.raises(errors.PrimaGateError, match="malformed_output"):
-        call(run.gate, model=ALIAS, messages=MSGS)
-    assert run.workers == []
-
-
-def test_a_latest_turn_over_the_budget_calls_nobody(call: Caller) -> None:
-    run = Run(["MEDIUM 0.9"], policy={**POLICY, "context_token_budget": 2})
-    with pytest.raises(errors.PrimaGateError, match="context_token_budget"):
-        call(run.gate, model=ALIAS, messages=MSGS)
-    assert run.analyzed == [] and run.workers == []
 
 
 def test_the_analyzer_sees_the_bounded_conversation_not_the_system_prompt(call: Caller) -> None:

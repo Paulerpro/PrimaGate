@@ -30,6 +30,7 @@ from primagate.schema.events import (
     PremiumRoutingSelected,
     RetryScheduled,
     RoutingDecision,
+    RoutingDegraded,
 )
 from primagate.schema.policy import TIER_ROUTING_ALIAS
 from primagate.schema.tiers import UNKNOWN, Unknown
@@ -63,6 +64,7 @@ __all__ = [
     "NotFoundError",
     "PermissionDeniedError",
     "PremiumRoutingSelected",
+    "RoutingDegraded",
     "PrimaGate",
     "PrimaGateError",
     "RateLimitError",

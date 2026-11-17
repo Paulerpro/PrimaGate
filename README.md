@@ -215,9 +215,8 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
 - `cost_unknown`: the model that answered has no price, so there is no cost Estimate (see step 10).
 - `call_succeeded` and `call_failed`: a call that was sent is over. A call answered from memory
   ends with `cache_hit` instead.
-- `routing_decision`, `low_confidence_downgrade` and `premium_routing_selected`: decision events
-  for Tier Routing, which is not part of PrimaGate yet. They are defined now so you can write
-  handlers early; nothing emits them (see step 13).
+- `routing_decision`, `low_confidence_downgrade`, `premium_routing_selected` and
+  `routing_degraded`: decision events for Tier Routing (see steps 13 and 16).
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
 names and status codes, never message text, error text or keys. Your handler must be quick and
@@ -428,12 +427,14 @@ more memory.
 
 ### 13. Trace a decision
 
-Tier Routing will send each request to a model chosen by an Analyzer. Every such decision is
+Tier Routing (step 16) sends each request to a model chosen by an Analyzer. Every such decision is
 reported as an event, and an event never holds conversation content, so you can explain a choice
-without reading anything anyone said. The three decision events, `routing_decision`,
-`low_confidence_downgrade` (the Analyzer was not confident, so the default Tier was used) and
-`premium_routing_selected` (the chosen Tier costs more than the cheapest eligible one), all carry the fields below. Their
-details may grow when Tier Routing arrives, but these fields will stay:
+without reading anything anyone said. The four decision events are `routing_decision`,
+`low_confidence_downgrade` (the Analyzer was not confident, so the default Tier was used),
+`premium_routing_selected` (the chosen Tier costs more than the cheapest eligible one) and
+`routing_degraded` (routing could not decide, so the Interim Binding was used). All carry the
+fields below; `routing_degraded` adds a `reason`. Their details may grow, but these fields will
+stay:
 
 - `profile_id`: the Profile the decision used.
 - `input_fingerprint`: the fingerprint of the app inputs that Profile was prepared from.
@@ -441,9 +442,9 @@ details may grow when Tier Routing arrives, but these fields will stay:
   decision.
 - `binding_id`: the model binding that was chosen.
 
-Each is always a string. When no Profile is ready yet, the value is `"unknown"`. Nothing emits these
-events in this release, so the sample below hands in one made-up event to show how you will look
-one up: index them in your handler, and find the ones for an id when a response looks wrong.
+Each is always a string. When no Profile is ready yet, the value is `"unknown"`. Tier Routing emits
+these events once a call uses the alias; the sample below hands in one made-up event so it runs
+without an Analyzer, to show how to look one up: index them in your handler, and find the ones for an id when a response looks wrong.
 
 ```python
 from collections import defaultdict
@@ -494,7 +495,7 @@ starts, so do not store it.
 
 ### 14. Declare what each Tier means
 
-Tier Routing, which is not part of PrimaGate yet, will send each request to the cheapest of three
+Tier Routing (step 16) sends each request to the cheapest of three
 Tiers that can do the job: `SMALL`, `MEDIUM` and `POWERFUL`, in that order of strength. You can
 already say which model plays each Tier, how to call it, what it can do and what it costs. Only
 those three labels are accepted, exactly as written.
@@ -543,7 +544,7 @@ to count, and one model may not be given two different prices.
 
 ### 15. Declare your routing rules
 
-Tier Routing, which is not part of PrimaGate yet, will follow a Policy that you write once at setup.
+Tier Routing follows a Policy that you write once at setup.
 The fields that depend on your app and your Analyzer have no default, so setup refuses a Policy that
 leaves them out; the optional fields below have the defaults they name. A Policy can only enable
 Tiers that have a binding (step 14). Tier labels are exact upper-case words, and naming one twice is
@@ -655,13 +656,17 @@ Tiers able to take it costs one extra, short request to the Analyzer's provider 
 one, and that request's tokens are in `metadata.analyzer`, not in `metadata.cost`. An Analyzer
 model with no known price reports `unknown_model` and no cost, as any model does (step 10).
 
-Two limits of this release. If the Analyzer fails, answers in the wrong shape or the latest turn
-is larger than `context_token_budget`, the call fails with a `PrimaGateError` and nothing is sent to
-a worker model; using the `interim_binding` for those cases is not available yet. A fallback list
-is not applied to alias calls either. The alias cannot be used in a fallback list.
-
-A repeat of an identical alias call is answered from memory (step 12) before any of this runs, as
-long as caching is on for that call, so a repeat never asks the Analyzer; a stream never is.
+When routing cannot choose, your request is not failed. If the Analyzer is unreachable or times
+out, answers in the wrong shape, names a Tier that cannot take the request, or the latest turn is
+larger than `context_token_budget`, the call goes to your `interim_binding` Tier instead. That is
+one dispatch to a worker model, with no second Analyzer request (retries and provider routing for
+that model still apply as for any call), and a `routing_degraded` event (step 13) says why with
+one of these reasons: `provider_error`, `malformed_output`, `tier_not_enabled`, `no_conversation`
+or `over_budget`. If the `interim_binding` Tier cannot take the request, the nearest Tier that can
+is used, stronger ones first. Because the Interim Tier may sit above the cheapest able one,
+`premium_routing_selected` can follow `routing_degraded` for the same call. An answer given this
+way is never stored in the cache (step 12), so the next identical call asks the Analyzer again. A
+fallback list is not applied to alias calls yet, and the alias cannot be used in a fallback list.
 
 ### 17. What the Analyzer reads
 

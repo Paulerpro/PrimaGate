@@ -243,7 +243,10 @@ def test_readme_explains_how_to_trace_a_decision() -> None:
         "prep_prompt_version",
         "analyzer_prompt_version",
         "binding_id",
-        "Nothing emits these",
+        "Tier Routing emits",
+        "`routing_degraded`",
+        "`over_budget`",
+        "never stored in the cache",
         "no decision event",
     ):
         assert phrase in README, phrase
@@ -265,7 +268,7 @@ def test_readme_explains_tier_bindings() -> None:
         "MEDIUM",
         "POWERFUL",
         "UNKNOWN",
-        "not part of PrimaGate yet",
+        "Tier Routing (step 16) sends",
         "price_overrides",
         "per million tokens",
         "not applied to any call",

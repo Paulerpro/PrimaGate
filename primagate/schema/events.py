@@ -155,6 +155,17 @@ class PremiumRoutingSelected(DecisionEvent):
     event_type: ClassVar[str] = "premium_routing_selected"
 
 
+@dataclass(frozen=True)
+class RoutingDegraded(DecisionEvent):
+    """Routing could not decide, so the Interim Binding was used; `reason` says why."""
+
+    event_type: ClassVar[str] = "routing_degraded"
+    log_level: ClassVar[int] = logging.WARNING
+
+    # One of a fixed set of names, never provider text, so the event is safe to log.
+    reason: str
+
+
 EVENT_CLASSES: tuple[type[Event], ...] = (
     DispatchStarted,
     DispatchFailed,
@@ -167,6 +178,7 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     RoutingDecision,
     LowConfidenceDowngrade,
     PremiumRoutingSelected,
+    RoutingDegraded,
 )
 EVENT_TYPES: tuple[str, ...] = tuple(cls.event_type for cls in EVENT_CLASSES)
 # Names the package root re-exports.

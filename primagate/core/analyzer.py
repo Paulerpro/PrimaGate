@@ -145,21 +145,30 @@ def decision_events(
     binding_id: str,
     eligible: Sequence[Tier],
     analysis: Analysis | None,
+    *,
+    asked: bool | None = None,
+    degraded: str | None = None,
 ) -> tuple[events.Event, ...]:
     """The events that explain one routing decision, with ids only and never message content.
 
     No Profile is READY until preparation exists, so its fields say "unknown", as do the prompt
-    versions of steps that did not run.
+    versions of steps that did not run. `asked` says whether the Analyzer was actually called,
+    which an analysis that cost nothing cannot tell. `degraded` is the reason the Interim
+    Binding was used, when it was.
     """
+    if asked is None:
+        asked = analysis is not None
     unknown = "unknown"
     fields = {
         "profile_id": unknown,
         "input_fingerprint": unknown,
         "prep_prompt_version": unknown,
-        "analyzer_prompt_version": ANALYZER_PROMPT_VERSION if analysis else unknown,
+        "analyzer_prompt_version": ANALYZER_PROMPT_VERSION if asked else unknown,
         "binding_id": binding_id,
     }
     made: list[events.Event] = [events.RoutingDecision(request_id, **fields)]
+    if degraded is not None:
+        made.append(events.RoutingDegraded(request_id, **fields, reason=degraded))
     outcome = analysis.outcome if analysis else None
     if isinstance(outcome, Verdict) and outcome.low_confidence_downgrade:
         made.append(events.LowConfidenceDowngrade(request_id, **fields))

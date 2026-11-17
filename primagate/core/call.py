@@ -463,20 +463,48 @@ def start(
         analysis: Analysis | None,
         key: str | None,
         read_already: bool,
+        *,
+        asked: bool | None = None,
+        degraded: str | None = None,
     ) -> Action:
         eligible = [t for t, _ in routing.candidates]
         chosen = dict(routing.candidates)[tier]
         binding = routing.tiers.bindings[tier]
         usage = analysis.usage if analysis else None
-        chosen = dataclasses.replace(chosen, tier=tier, analyzer=usage)
+        # An answer from the Interim Binding is a stand-in, so it must never be replayed.
+        chosen = dataclasses.replace(
+            chosen, tier=tier, analyzer=usage, no_cache=degraded is not None
+        )
         announced = decision_events(
             request_id,
             tier,
             f"{tier.name}:{binding.provider}/{binding.model_id}",
             eligible,
             analysis,
+            asked=asked,
+            degraded=degraded,
         )
         return Emit(announced, ready(chosen, request_id, key, read_already))
+
+    def degrade(
+        routing: Routing,
+        reason: str,
+        request_id: str,
+        key: str | None,
+        read_already: bool,
+        analysis: Analysis | None = None,
+        *,
+        asked: bool = False,
+    ) -> Action:
+        """Give up on choosing: one dispatch on the Interim Binding, with the reason on record.
+
+        Every cause that stops the Analyzer deciding comes here, so each degrades the same way.
+        """
+        eligible = tuple(t for t, _ in routing.candidates)
+        tier = resolve_tier(routing.tiers.policy.interim_binding, eligible)
+        return decided(
+            routing, tier, request_id, analysis, key, read_already, asked=asked, degraded=reason
+        )
 
     def analyzing(routing: Routing, request_id: str, key: str | None, read_already: bool) -> Action:
         """Two or more Tiers can serve the request, so the Analyzer chooses between them."""
@@ -484,17 +512,15 @@ def start(
         eligible = tuple(t for t, _ in routing.candidates)
         # Only Tiers that can take the request are offered, so the answer is always usable.
         narrowed_policy = dataclasses.replace(tiers.policy, enabled_tiers=eligible)
+
+        def give_up(reason: str, analysis: Analysis | None = None, asked: bool = False) -> Action:
+            return degrade(routing, reason, request_id, key, read_already, analysis, asked=asked)
+
         if tiers.analyzer is None:
-            return failed(request_id, PrimaGateError("Tier Routing has no analyzer declared"))
+            return give_up("no_analyzer")
         view = bounded_context(request, tiers.policy.context_token_budget)
         if isinstance(view, OverBudget):
-            return failed(
-                request_id,
-                PrimaGateError(
-                    "the latest exchange is larger than context_token_budget; using the Interim "
-                    "Binding for that is not part of PrimaGate yet"
-                ),
-            )
+            return give_up("over_budget")
         content = ProfileContent(unknowns=PLACEHOLDER_UNKNOWNS)
         try:
             begun = begin_analysis(
@@ -505,15 +531,15 @@ def start(
                 capabilities,
                 BUNDLED if prices is None else prices,
             )
-        except PrimaGateError as err:
-            return failed(request_id, err)
+        except PrimaGateError:
+            return give_up("analyzer_unavailable")
         if isinstance(begun, Analysis):
-            return failed(request_id, _analysis_failure(begun))
+            return give_up(begun.outcome.reason)
 
         def after(outcome: DispatchOutcome) -> Action:
             analysis = finish_analysis(begun, outcome, narrowed_policy)
             if isinstance(analysis.outcome, AnalyzerFailure):
-                return failed(request_id, _analysis_failure(analysis))
+                return give_up(analysis.outcome.reason, analysis, asked=True)
             chosen = resolve_tier(analysis.outcome.tier, eligible)
             return decided(routing, chosen, request_id, analysis, key, read_already)
 
@@ -549,14 +575,6 @@ def start(
 
     routed = request.model == TIER_ROUTING_ALIAS and tier_routing is not None and cacheable
     return NewId(begin_routed if routed else begin)
-
-
-def _analysis_failure(analysis: Analysis) -> PrimaGateError:
-    reason = analysis.outcome.reason
-    return PrimaGateError(
-        f"the Tier Routing Analyzer gave no usable answer ({reason}); using the Interim Binding "
-        "for that is not part of PrimaGate yet"
-    )
 
 
 def advance(action: Action, outcome: Outcome) -> Action:

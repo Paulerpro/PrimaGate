@@ -36,12 +36,14 @@ EXAMPLES: dict[str, events.Event] = {
     "RoutingDecision": events.RoutingDecision("req-1", **DECISION),
     "LowConfidenceDowngrade": events.LowConfidenceDowngrade("req-1", **DECISION),
     "PremiumRoutingSelected": events.PremiumRoutingSelected("req-1", **DECISION),
+    "RoutingDegraded": events.RoutingDegraded("req-1", **DECISION, reason="over_budget"),
 }
 
 DECISION_CLASSES = (
     events.RoutingDecision,
     events.LowConfidenceDowngrade,
     events.PremiumRoutingSelected,
+    events.RoutingDegraded,
 )
 
 
@@ -83,7 +85,12 @@ def test_every_catalog_event_is_exported_from_the_package_root(name: str) -> Non
 
 def test_the_decision_types_are_distinct_catalog_entries() -> None:
     types = [cls.event_type for cls in DECISION_CLASSES]
-    assert types == ["routing_decision", "low_confidence_downgrade", "premium_routing_selected"]
+    assert types == [
+        "routing_decision",
+        "low_confidence_downgrade",
+        "premium_routing_selected",
+        "routing_degraded",
+    ]
     assert all(cls in events.EVENT_CLASSES for cls in DECISION_CLASSES)
 
 
@@ -92,7 +99,8 @@ def test_a_decision_event_carries_the_traceability_fields(cls: type[events.Decis
     assert issubclass(cls, events.DecisionEvent)
     names = [f.name for f in dataclasses.fields(cls)]
     assert names[0] == "request_id" and set(DECISION_FIELDS) <= set(names)
-    shown = cls("req-1", **DECISION).to_dict()
+    extra = {"reason": "over_budget"} if cls is events.RoutingDegraded else {}
+    shown = cls("req-1", **DECISION, **extra).to_dict()
     assert all(shown[name] == "unknown" for name in DECISION_FIELDS)
 
 
