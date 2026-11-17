@@ -217,6 +217,9 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
   ends with `cache_hit` instead.
 - `routing_decision`, `low_confidence_downgrade`, `premium_routing_selected` and
   `routing_degraded`: decision events for Tier Routing (see steps 13 and 16).
+- `spending_ceiling_exceeded`: routed calls have cost more than your Policy's
+  `spending_ceiling`, and says how much: it carries the `ceiling` and the `total`, in US dollars
+  and estimated from the price map (see step 15).
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
 names and status codes, never message text, error text or keys. Your handler must be quick and
@@ -602,7 +605,15 @@ Optional:
   at once (step 16). The count is not shared between instances or processes, and only calls that
   really ask the Analyzer take a place in it: a repeat answered from memory, or a request only one
   Tier can take, does not.
-- `spending_ceiling`: US dollars. A warning, never a limit.
+- `spending_ceiling`: US dollars. A warning, never a limit. Once the estimated cost of the calls
+  made with the alias, each one's answer plus its Analyzer request, passes it, one
+  `spending_ceiling_exceeded` event is sent with the ceiling and the total, and it is also
+  written to the `primagate` log as a warning. It is sent once, and nothing about any call
+  changes: later calls are routed and answered exactly as before. The total is kept in memory
+  for each `PrimaGate` instance, so a restart starts again from zero. Plain model calls, calls
+  answered from memory, streams, models with no known price (step 10) and calls that end in an
+  error are not counted, nor are the failed attempts before a retry succeeds, so the total can
+  run a little below what you were billed.
 
 `interim_binding` and `ambiguous_context_default` must name enabled Tiers. A Policy is fixed once
 set up, so one request can never see its rules change halfway. Today a Policy only checks your setup:

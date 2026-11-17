@@ -37,6 +37,7 @@ EXAMPLES: dict[str, events.Event] = {
     "LowConfidenceDowngrade": events.LowConfidenceDowngrade("req-1", **DECISION),
     "PremiumRoutingSelected": events.PremiumRoutingSelected("req-1", **DECISION),
     "RoutingDegraded": events.RoutingDegraded("req-1", **DECISION, reason="over_budget"),
+    "SpendingCeilingExceeded": events.SpendingCeilingExceeded("req-1", 1.0, 1.5),
 }
 
 DECISION_CLASSES = (

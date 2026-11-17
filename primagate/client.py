@@ -26,6 +26,7 @@ from primagate.drivers.providers import (
     parse_provider_routing,
     parse_tier_bindings,
 )
+from primagate.drivers.spend import SpendTracker
 from primagate.drivers.sync import SyncDriver, SyncStream
 from primagate.drivers.tokens import TokenCounter, TokenCounting
 from primagate.schema.errors import BadRequestError, PrimaGateError
@@ -147,6 +148,8 @@ class PrimaGate:
             if self._policy is not None
             else None
         )
+        # One for both drivers, so the total counts a sync call and an async call together.
+        self._spend = SpendTracker()
         # One for both drivers, so a sync call and an async call can answer each other.
         self._cache = ResponseCache(_cache_size(cache_max_entries), secrets.token_bytes(16))
         self._event_handler = event_handler
@@ -246,6 +249,7 @@ class PrimaGate:
                     cache=self._cache,
                     tier_routing=self._tier_routing,
                     analyzer_cap=self._analyzer_cap,
+                    spend=self._spend,
                 )
             return self._driver
 
@@ -268,6 +272,7 @@ class PrimaGate:
                     cache=self._cache,
                     tier_routing=self._tier_routing,
                     analyzer_cap=self._analyzer_cap,
+                    spend=self._spend,
                 )
             return self._async_driver
 

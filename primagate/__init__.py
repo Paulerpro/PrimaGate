@@ -31,6 +31,7 @@ from primagate.schema.events import (
     RetryScheduled,
     RoutingDecision,
     RoutingDegraded,
+    SpendingCeilingExceeded,
 )
 from primagate.schema.policy import TIER_ROUTING_ALIAS
 from primagate.schema.tiers import UNKNOWN, Unknown
@@ -65,6 +66,7 @@ __all__ = [
     "PermissionDeniedError",
     "PremiumRoutingSelected",
     "RoutingDegraded",
+    "SpendingCeilingExceeded",
     "PrimaGate",
     "PrimaGateError",
     "RateLimitError",

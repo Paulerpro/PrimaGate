@@ -166,6 +166,21 @@ class RoutingDegraded(DecisionEvent):
     reason: str
 
 
+@dataclass(frozen=True)
+class SpendingCeilingExceeded(Event):
+    """Routed calls have cost more than the Policy's advisory `spending_ceiling`.
+
+    Sent once, when the total first passes it. Nothing about any call changes because of it.
+    """
+
+    event_type: ClassVar[str] = "spending_ceiling_exceeded"
+    log_level: ClassVar[int] = logging.WARNING
+
+    # US dollars, from the price map, so both are estimates and never a billing figure.
+    ceiling: float
+    total: float
+
+
 EVENT_CLASSES: tuple[type[Event], ...] = (
     DispatchStarted,
     DispatchFailed,
@@ -179,6 +194,7 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     LowConfidenceDowngrade,
     PremiumRoutingSelected,
     RoutingDegraded,
+    SpendingCeilingExceeded,
 )
 EVENT_TYPES: tuple[str, ...] = tuple(cls.event_type for cls in EVENT_CLASSES)
 # Names the package root re-exports.

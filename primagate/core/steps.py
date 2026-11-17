@@ -78,6 +78,8 @@ class Dispatch:
     # The Tier this dispatch serves under Tier Routing, and what choosing it cost; None otherwise.
     tier: Tier | None = None
     analyzer: AnalyzerUsage | None = None
+    # The Policy's advisory spending ceiling, carried so the finished call can be counted.
+    spending_ceiling: float | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +159,15 @@ class Analyze:
     resume: Callable[[DispatchOutcome | Declined], Action]
 
 
+@dataclass(frozen=True)
+class RecordSpend:
+    """Ask the driver to add `amount` (USD) to the running total against `ceiling`."""
+
+    amount: float
+    ceiling: float
+    resume: Callable[[SpendOutcome], Action]
+
+
 Action = (
     Dispatch
     | Return
@@ -169,6 +180,7 @@ Action = (
     | CacheRead
     | CacheWrite
     | Analyze
+    | RecordSpend
 )
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
@@ -184,6 +196,7 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     CacheRead,
     CacheWrite,
     Analyze,
+    RecordSpend,
 )
 
 
@@ -201,6 +214,13 @@ class Declined:
     """The driver did not send what it was asked to, and says why; core decides what follows."""
 
     reason: str
+
+
+@dataclass(frozen=True)
+class SpendOutcome:
+    total: float
+    # True only for the first call to take the total past the ceiling.
+    crossed: bool
 
 
 @dataclass(frozen=True)
@@ -245,6 +265,7 @@ class CacheWriteOutcome:
 Outcome = (
     DispatchOutcome
     | Declined
+    | SpendOutcome
     | RandomOutcome
     | SleepOutcome
     | IdOutcome

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
@@ -41,10 +42,12 @@ from primagate.core.steps import (
     Raise,
     Random,
     RandomOutcome,
+    RecordSpend,
     Return,
     Route,
     Sleep,
     SleepOutcome,
+    SpendOutcome,
 )
 from primagate.core.tiers import narrowed
 from primagate.schema import events
@@ -474,7 +477,11 @@ def start(
         usage = analysis.usage if analysis else None
         # An answer from the Interim Binding is a stand-in, so it must never be replayed.
         chosen = dataclasses.replace(
-            chosen, tier=tier, analyzer=usage, no_cache=degraded is not None
+            chosen,
+            tier=tier,
+            analyzer=usage,
+            no_cache=degraded is not None,
+            spending_ceiling=routing.tiers.policy.spending_ceiling,
         )
         announced = decision_events(
             request_id,
@@ -594,6 +601,8 @@ def advance(action: Action, outcome: Outcome) -> Action:
         return action.resume
     if isinstance(action, Analyze) and isinstance(outcome, DispatchOutcome | Declined):
         return action.resume(outcome)
+    if isinstance(action, RecordSpend) and isinstance(outcome, SpendOutcome):
+        return action.resume(outcome)
     following = next_action(action, outcome)
     if (
         isinstance(action, Dispatch)
@@ -619,14 +628,46 @@ def _announced(action: Action, outcome: Outcome, following: Action) -> Action:
 
 def _written(action: Action, following: Action) -> Action:
     """Store a final answer before it is returned, so the next identical call can reuse it."""
+    final = _spent(action, following)
     if (
         isinstance(action, Dispatch)
         and action.cache_key
         and not action.no_cache
         and isinstance(following, Return)
     ):
-        return CacheWrite(action.cache_key, following.response, following)
-    return following
+        return CacheWrite(action.cache_key, following.response, final)
+    return final
+
+
+def _spent(action: Action, following: Action) -> Action:
+    """Count a finished routed call against the ceiling, if the Policy set one.
+
+    The answer is returned whatever the count says: the ceiling only ever warns.
+    """
+    if not (
+        isinstance(action, Dispatch)
+        and action.tier is not None
+        and action.spending_ceiling is not None
+        and isinstance(following, Return)
+    ):
+        return following
+    metadata = following.response.metadata
+    if metadata is None:
+        return following
+    costs = [metadata.cost, metadata.analyzer.cost if metadata.analyzer else None]
+    # A price that is not a plain non-negative number would poison the total for good.
+    paid = [c.total for c in costs if c is not None and math.isfinite(c.total) and c.total >= 0]
+    if not paid:
+        return following
+    ceiling = action.spending_ceiling
+
+    def after(counted: SpendOutcome) -> Action:
+        if not counted.crossed:
+            return following
+        warning = events.SpendingCeilingExceeded(action.request_id, ceiling, counted.total)
+        return Emit((warning,), following)
+
+    return RecordSpend(sum(paid), ceiling, after)
 
 
 def _after_read(first: Dispatch, read: CacheReadOutcome) -> Action:

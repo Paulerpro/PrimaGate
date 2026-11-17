@@ -42,7 +42,7 @@ def _response() -> ChatCompletion:
     )
 
 
-def test_closed_action_set_is_dispatch_return_raise_random_sleep_id_emit() -> None:
+def test_closed_action_set_is_exactly_the_actions_core_can_ask_for() -> None:
     names = {t.__name__ for t in steps.ACTION_TYPES}
     assert names == {
         "Dispatch",
@@ -56,6 +56,7 @@ def test_closed_action_set_is_dispatch_return_raise_random_sleep_id_emit() -> No
         "CacheRead",
         "CacheWrite",
         "Analyze",
+        "RecordSpend",
     }
 
 

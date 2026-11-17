@@ -34,6 +34,7 @@ from primagate.drivers.providers import (
     SettingsSource,
     builtin_adapters,
 )
+from primagate.drivers.spend import SpendTracker
 from primagate.drivers.tokens import TokenCounting
 from primagate.schema.analyzer import Analysis, AnalyzerFailure
 from primagate.schema.errors import PrimaGateError
@@ -135,6 +136,7 @@ class AsyncDriver:
         cache: ResponseCache | None = None,
         tier_routing: TierRouting | None = None,
         analyzer_cap: AnalyzerCap | None = None,
+        spend: SpendTracker | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -149,6 +151,7 @@ class AsyncDriver:
         self._cache = cache or ResponseCache()
         self._tier_routing = tier_routing
         self._analyzer_cap = analyzer_cap
+        self._spend = spend or SpendTracker()
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -169,6 +172,7 @@ class AsyncDriver:
         cache: ResponseCache | None = None,
         tier_routing: TierRouting | None = None,
         analyzer_cap: AnalyzerCap | None = None,
+        spend: SpendTracker | None = None,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -184,6 +188,7 @@ class AsyncDriver:
             cache=cache,
             tier_routing=tier_routing,
             analyzer_cap=analyzer_cap,
+            spend=spend,
         )
 
     async def aclose(self) -> None:
@@ -294,6 +299,10 @@ class AsyncDriver:
             if cap is not None:
                 cap.release()
 
+    async def _record_spend(self, action: steps.RecordSpend) -> Step:
+        total, crossed = self._spend.add(action.amount, action.ceiling)
+        return steps.SpendOutcome(total, crossed)
+
     async def _random(self, action: steps.Random) -> Step:
         return steps.RandomOutcome(random.random())
 
@@ -331,6 +340,7 @@ class AsyncDriver:
     HANDLERS: ClassVar[dict[type, Callable[[Any, Any], Awaitable[Step]]]] = {
         steps.Dispatch: _dispatch,
         steps.Analyze: _analyze,
+        steps.RecordSpend: _record_spend,
         steps.Return: _return,
         steps.Raise: _raise,
         steps.Random: _random,
