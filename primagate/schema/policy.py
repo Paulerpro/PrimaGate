@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
+from primagate.schema.profile import ProfileSources
 from primagate.schema.tiers import Tier, TierBinding
 
 COST_PREFERENCES: Final = ("balanced", "cost_conscious", "capability_first")
@@ -38,3 +39,8 @@ class TierRouting:
     bindings: Mapping[Tier, TierBinding]
     # The model that judges which Tier a request needs; None when only one Tier is enabled.
     analyzer: str | None = None
+    # Kept beside the Policy so a call pins the Profile inputs it started with. Both are None
+    # when nothing was declared, and routing then reads the empty Profile.
+    # Left out of the repr, so a traceback or log line never echoes the app's own text.
+    sources: ProfileSources | None = field(default=None, repr=False)
+    fingerprint: str | None = None

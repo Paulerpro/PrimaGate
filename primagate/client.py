@@ -24,8 +24,10 @@ from primagate.drivers.providers import (
     parse_fallbacks,
     parse_policy,
     parse_price_overrides,
+    parse_profile_sources,
     parse_provider_routing,
     parse_tier_bindings,
+    profile_fingerprint,
 )
 from primagate.drivers.spend import SpendTracker
 from primagate.drivers.sync import SyncDriver, SyncStream
@@ -98,6 +100,7 @@ class PrimaGate:
         tier_bindings: Mapping[str, Mapping[str, Any]] | None = None,
         policy: Mapping[str, Any] | None = None,
         analyzer: str | None = None,
+        profile_sources: Mapping[str, Any] | None = None,
         token_counter: TokenCounter | None = None,
         cache_max_entries: int = DEFAULT_MAX_ENTRIES,
         profile_store: ProfileStore | None = None,
@@ -124,9 +127,18 @@ class PrimaGate:
         # After the bindings, since a Policy may only enable Tiers that have one.
         self._policy = parse_policy(policy, self._tier_bindings)
         analyzer = parse_analyzer(analyzer, self._policy)
-        # Handed to the drivers whole, so one call sees one Policy and one set of bindings.
+        # Declared once: a change of sources means a new instance, and so a new fingerprint.
+        sources = parse_profile_sources(profile_sources, self._policy, analyzer)
+        # Handed to the drivers whole, so one call sees one Policy, one set of bindings and one
+        # fingerprint.
         self._tier_routing = (
-            TierRouting(self._policy, self._tier_bindings, analyzer)
+            TierRouting(
+                self._policy,
+                self._tier_bindings,
+                analyzer,
+                sources,
+                profile_fingerprint(sources, analyzer),
+            )
             if self._policy is not None
             else None
         )

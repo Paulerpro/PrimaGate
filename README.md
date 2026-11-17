@@ -619,6 +619,52 @@ Optional:
 set up, so one request can never see its rules change halfway. Today a Policy only checks your setup:
 it does not change any call.
 
+`profile_sources` describes your app, so a Profile of it can be prepared for the Analyzer (step 17):
+
+```python
+from primagate import PrimaGate
+
+gate = PrimaGate(
+    tier_bindings={
+        "SMALL": {"model": "gpt-4o-mini"},
+        "MEDIUM": {"model": "gpt-4o"},
+    },
+    analyzer="gpt-4o-mini",
+    policy={
+        "enabled_tiers": ["SMALL", "MEDIUM"],
+        "confidence_threshold": 0.8,
+        "context_token_budget": 2000,
+        "interim_binding": "MEDIUM",
+    },
+    profile_sources={
+        "instructions": "Answer questions about orders.",
+        "tool_descriptions": ["Look up an order by its number", "Cancel an order"],
+        "skill_descriptions": ["Explain the refund policy"],
+    },
+)
+
+response = gate.completion(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Say hello in five words."}],
+)
+print(response.choices[0].message.content)
+```
+
+Every key is optional. `instructions` is text, and the two descriptions are lists of non-blank
+text (a bare string is not a list, and tool definitions as dicts are not accepted). Sources need an
+`analyzer` and a Policy with two or more Tiers, since only the Analyzer reads a Profile. They are
+read once, when the instance is created: changing your own list later changes nothing, and to
+change a source you create a new instance, for example on restart. A Profile is keyed by a
+fingerprint of the sources and the `analyzer` model, so changing either makes a stored Profile
+stale. Descriptions are matched as exact text with their order ignored, so added spaces or a
+repeated description count as a change. Upgrading PrimaGate can also make a stored Profile stale,
+when the prompt that prepares it or the shape of a Profile has changed. The `analyzer` name is taken
+as written, so when the provider changes the model behind an undated alias such as `gpt-4o-mini`,
+the Profile is not prepared again. Name a dated model version if the fingerprint should follow
+the exact model. Prices, Tier Bindings and the rest of the Policy are not part
+of the fingerprint. Profiles are not prepared from the sources yet, so for now declaring them changes no call and
+they are sent nowhere.
+
 ### 16. Ask for Tier Routing
 
 Pass `TIER_ROUTING_ALIAS` (the string `"primagate/auto"`) as `model=` to ask for Tier Routing. Any

@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from primagate.adapters import anthropic, openai
 from primagate.core import fallbacks as core_fallbacks
 from primagate.core import policy as core_policy
+from primagate.core import profile as core_profile
 from primagate.core import tiers as core_tiers
 from primagate.core.call import parse_drop_params
 from primagate.core.models import resolve_model
@@ -19,6 +20,7 @@ from primagate.core.ports import Adapter
 from primagate.core.prices import Price
 from primagate.schema.errors import AuthenticationError, BadRequestError
 from primagate.schema.policy import TIER_ROUTING_ALIAS, Policy
+from primagate.schema.profile import ProfileSources
 from primagate.schema.tiers import (
     FEATURES,
     UNKNOWN,
@@ -280,6 +282,64 @@ def parse_analyzer(value: object, policy: Policy | None) -> str | None:
     if not model.strip():
         raise BadRequestError(f"analyzer names '{value}' without a model")
     return value
+
+
+_SOURCE_LISTS = ("tool_descriptions", "skill_descriptions")
+_SOURCE_FIELDS = frozenset({"instructions", *_SOURCE_LISTS})
+
+
+def parse_profile_sources(
+    value: object, policy: Policy | None, analyzer: str | None
+) -> ProfileSources | None:
+    """What the Profile is prepared from, checked and copied at setup; None when nothing is in it.
+
+    Messages name the field but never echo a value, since instructions can hold anything.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise BadRequestError(
+            "profile_sources must be a mapping of instructions, tool_descriptions and "
+            "skill_descriptions"
+        )
+    _only("profile_sources", value, _SOURCE_FIELDS)
+    instructions = value.get("instructions", "")
+    if not isinstance(instructions, str):
+        raise BadRequestError("profile_sources: instructions must be text")
+    # Copied into tuples so a caller changing their own list later cannot move the fingerprint.
+    lists = {name: _source_texts(name, value.get(name, ())) for name in _SOURCE_LISTS}
+    # Blank instructions say nothing, so they must fingerprint exactly as leaving them out does.
+    if not instructions.strip():
+        instructions = ""
+    if not instructions and not any(lists.values()):
+        return None
+    sources = ProfileSources(instructions, lists["tool_descriptions"], lists["skill_descriptions"])
+    # A Profile is only ever read by the Analyzer, which only runs when it has Tiers to choose from.
+    if policy is None or len(policy.enabled_tiers) < 2 or analyzer is None:
+        raise BadRequestError(
+            "profile_sources needs a policy that enables two or more Tiers and an analyzer, "
+            "since only the Analyzer reads a Profile"
+        )
+    return sources
+
+
+def _source_texts(name: str, value: object) -> tuple[str, ...]:
+    # A bare string is a Sequence too, and would be split into one description per character.
+    message = f"profile_sources: {name} must be a list of non-blank text"
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise BadRequestError(message)
+    # Read once, so what is checked is exactly what is kept.
+    items = tuple(value)
+    if not all(isinstance(v, str) and v.strip() for v in items):
+        raise BadRequestError(message)
+    return items
+
+
+def profile_fingerprint(sources: ProfileSources | None, analyzer: str | None) -> str | None:
+    """The key a prepared Profile is stored and looked up under; None when there are no sources."""
+    if sources is None or analyzer is None:
+        return None
+    return core_profile.input_fingerprint(sources, core_profile.PREP_PROMPT_VERSION, analyzer)
 
 
 def parse_tier_bindings(value: object) -> dict[Tier, TierBinding]:

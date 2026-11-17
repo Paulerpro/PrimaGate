@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from primagate.core.counting import heuristic_count
 from primagate.core.steps import Action, StoreRead, StoreWrite
@@ -29,6 +29,9 @@ _PROFILE_FIELDS = (
 _CONTENT_TEXT = ("purpose",)
 _CONTENT_LISTS = ("interactions", "constraints", "capabilities", "unknowns")
 PLACEHOLDER_UNKNOWNS = ("purpose", "interactions", "constraints", "capabilities")
+# Names the prompt that turns sources into a Profile. It is part of the fingerprint, so changing
+# that prompt means bumping this, or Profiles prepared by the old prompt would still be served.
+PREP_PROMPT_VERSION: Final = "prep-1"
 
 
 def input_fingerprint(
