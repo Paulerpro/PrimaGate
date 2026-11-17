@@ -10,7 +10,9 @@ from typing import Any, ClassVar, Self
 import httpx2
 
 from primagate.core import steps
+from primagate.core.analyzer import begin_analysis, finish_analysis
 from primagate.core.call import advance, parse_drop_params, start
+from primagate.core.context import RoutingContext
 from primagate.core.ports import Adapter
 from primagate.core.prices import BUNDLED, PriceTable
 from primagate.drivers._shared import (
@@ -32,8 +34,10 @@ from primagate.drivers.providers import (
     builtin_adapters,
 )
 from primagate.drivers.tokens import TokenCounting
+from primagate.schema.analyzer import Analysis, AnalyzerFailure
 from primagate.schema.errors import PrimaGateError
-from primagate.schema.policy import TierRouting
+from primagate.schema.policy import Policy, TierRouting
+from primagate.schema.profile import ProfileContent
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
 from primagate.schema.wire import (
     DEFAULT_RETRY,
@@ -238,6 +242,26 @@ class AsyncDriver:
         except PrimaGateError as err:
             return steps.DispatchOutcome(error=err)
         return stream
+
+    async def analyze(
+        self, model: str, profile: ProfileContent, context: RoutingContext, policy: Policy
+    ) -> Analysis:
+        """Ask `model` which Tier the conversation needs, with exactly one low-level dispatch.
+
+        It never goes through `run`, so routing, retries and fallbacks cannot reach it, and a
+        failed answer is returned as a failure for the caller to decide on.
+        """
+        begun = begin_analysis(model, profile, context, policy, self._capabilities, self._prices)
+        if isinstance(begun, Analysis):
+            return begun
+        try:
+            outcome = await self._dispatch(begun)
+        except PrimaGateError:
+            # A missing key is still the Analyzer failing, and routing must survive that.
+            return Analysis(AnalyzerFailure("provider_error"), None)
+        if not isinstance(outcome, steps.DispatchOutcome):
+            raise PrimaGateError("Analyzer dispatch produced no outcome")
+        return finish_analysis(begun, outcome, policy)
 
     async def perform(self, action: steps.Action) -> Step:
         handler = self.HANDLERS.get(type(action))

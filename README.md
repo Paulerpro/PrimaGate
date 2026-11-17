@@ -265,7 +265,7 @@ What the setting does not change:
   message content but is yours to keep private.
 
 Turn `payload_retention` on only where logs and handlers are as private as your users' messages.
-A disclosure about what the Tier Routing Analyzer reads comes with that feature.
+What the Tier Routing Analyzer reads is described in step 17.
 
 ### 10. See what a call cost
 
@@ -641,6 +641,33 @@ A repeat of an identical alias call is answered from memory (step 12) before any
 long as caching is on for that call; a stream never is. Two limits of this release: the response does
 not yet record which Tier answered (`attempt_chain` shows the model), and a fallback list
 is not applied to alias calls yet. The alias cannot be used in a fallback list.
+
+### 17. What the Analyzer reads
+
+The Analyzer is not wired into calls yet, so nothing described here is sent in this release. This
+is what it will read once it is.
+
+Tier Routing asks one model, the Analyzer, which Tier a request needs. That model is not your
+worker model, and you choose it. It runs in your process with your own keys, and PrimaGate sends
+it only this:
+
+- The Profile of your app: what your instructions, tool descriptions and skill descriptions say
+  about it, once they have been boiled down. Those sources are sent to the Analyzer's provider to
+  make the Profile.
+- A bounded slice of the recent conversation: the latest turn in full, plus at most three earlier
+  turns that fit your `context_token_budget` (step 15). That includes the tool calls the assistant
+  made, with their arguments, and the tool results. System and developer messages and images are
+  not included, and nothing is summarised.
+
+**Both go to whichever Provider hosts the Analyzer model**, so pick an Analyzer whose provider you
+are content to show that text to. The request your worker model receives is never changed or cut
+down for the Analyzer.
+
+The Analyzer must answer with exactly one Tier word and a confidence, like `MEDIUM 0.82`. Anything
+else, including the right words inside a longer reply, is treated as a failed analysis and never
+guessed at. An answer below your `confidence_threshold` is not a failure: it takes your
+`ambiguous_context_default`. The Analyzer's own cost is reported on its own line, apart from the
+cost of your worker model.
 
 ## Notes
 
