@@ -15,6 +15,7 @@ from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.cache import DEFAULT_MAX_ENTRIES, ResponseCache
 from primagate.drivers.capacity import DEFAULT_MAX_CONCURRENT_ANALYZER_CALLS, AnalyzerCap
+from primagate.drivers.profile_store import ProfileStore, default_profile_store
 from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
@@ -99,6 +100,7 @@ class PrimaGate:
         analyzer: str | None = None,
         token_counter: TokenCounter | None = None,
         cache_max_entries: int = DEFAULT_MAX_ENTRIES,
+        profile_store: ProfileStore | None = None,
         # Test seam: must serve both modes, as httpx2.MockTransport does.
         transport: httpx2.BaseTransport | None = None,
     ) -> None:
@@ -152,6 +154,8 @@ class PrimaGate:
         self._spend = SpendTracker()
         # One for both drivers, so a sync call and an async call can answer each other.
         self._cache = ResponseCache(_cache_size(cache_max_entries), secrets.token_bytes(16))
+        # One for both drivers, so a Profile written in one mode is read in the other.
+        self._profile_store = default_profile_store() if profile_store is None else profile_store
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params
@@ -250,6 +254,7 @@ class PrimaGate:
                     tier_routing=self._tier_routing,
                     analyzer_cap=self._analyzer_cap,
                     spend=self._spend,
+                    profile_store=self._profile_store,
                 )
             return self._driver
 
@@ -273,6 +278,7 @@ class PrimaGate:
                     tier_routing=self._tier_routing,
                     analyzer_cap=self._analyzer_cap,
                     spend=self._spend,
+                    profile_store=self._profile_store,
                 )
             return self._async_driver
 

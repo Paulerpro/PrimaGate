@@ -711,6 +711,15 @@ guessed at. An answer below your `confidence_threshold` is not a failure: it tak
 `ambiguous_context_default`. The Analyzer's own cost is reported on its own line, apart from the
 cost of your worker model.
 
+Each instance holds a Profile store, kept in memory by default and shared by `completion` and
+`acompletion`. Nothing goes to disk, so it is empty after a restart. Until Profiles are prepared it
+is never read or written; `profile_store=` is there so another store can be plugged in later. A
+custom store needs a `non_blocking` flag and plain (not `async def`), thread-safe `read()` and
+`write(profile)` methods. `read()` returns the stored Profile or `None`, and `write` replaces it, so
+a reader sees the old Profile or the new one, never a mix. Errors it raises reach the caller
+unchanged. If `non_blocking` is false, async calls run `read()` and `write()` in a worker thread so
+your event loop is never held up.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)

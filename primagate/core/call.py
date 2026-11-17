@@ -48,6 +48,10 @@ from primagate.core.steps import (
     Sleep,
     SleepOutcome,
     SpendOutcome,
+    StoreRead,
+    StoreReadOutcome,
+    StoreWrite,
+    StoreWriteOutcome,
 )
 from primagate.core.tiers import narrowed
 from primagate.schema import events
@@ -598,6 +602,10 @@ def advance(action: Action, outcome: Outcome) -> Action:
     if isinstance(action, CacheRead) and isinstance(outcome, CacheReadOutcome):
         return action.resume(outcome)
     if isinstance(action, CacheWrite) and isinstance(outcome, CacheWriteOutcome):
+        return action.resume
+    if isinstance(action, StoreRead) and isinstance(outcome, StoreReadOutcome):
+        return action.resume(outcome)
+    if isinstance(action, StoreWrite) and isinstance(outcome, StoreWriteOutcome):
         return action.resume
     if isinstance(action, Analyze) and isinstance(outcome, DispatchOutcome | Declined):
         return action.resume(outcome)

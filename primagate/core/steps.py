@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from primagate.core.prices import BUNDLED, PriceTable
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import Event
+from primagate.schema.profile import Profile
 from primagate.schema.tiers import Tier
 from primagate.schema.types import (
     AnalyzerUsage,
@@ -148,6 +149,22 @@ class CacheWrite:
 
 
 @dataclass(frozen=True)
+class StoreRead:
+    """Ask the driver for the stored Profile; `resume` reads it from `outcome.profile`, None when
+    the store is empty."""
+
+    resume: Callable[[StoreReadOutcome], Action]
+
+
+@dataclass(frozen=True)
+class StoreWrite:
+    """Ask the driver to put `profile` in the store, then go on with `resume`."""
+
+    profile: Profile
+    resume: Action
+
+
+@dataclass(frozen=True)
 class Analyze:
     """Ask the driver to send the Analyzer's one dispatch; `resume` reads its outcome.
 
@@ -179,6 +196,8 @@ Action = (
     | CountTokens
     | CacheRead
     | CacheWrite
+    | StoreRead
+    | StoreWrite
     | Analyze
     | RecordSpend
 )
@@ -195,6 +214,8 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     CountTokens,
     CacheRead,
     CacheWrite,
+    StoreRead,
+    StoreWrite,
     Analyze,
     RecordSpend,
 )
@@ -262,6 +283,17 @@ class CacheWriteOutcome:
     pass
 
 
+@dataclass(frozen=True)
+class StoreReadOutcome:
+    # Whatever the store holds, unchecked; core decides whether it still fits.
+    profile: Profile | None
+
+
+@dataclass(frozen=True)
+class StoreWriteOutcome:
+    pass
+
+
 Outcome = (
     DispatchOutcome
     | Declined
@@ -273,4 +305,6 @@ Outcome = (
     | CountOutcome
     | CacheReadOutcome
     | CacheWriteOutcome
+    | StoreReadOutcome
+    | StoreWriteOutcome
 )

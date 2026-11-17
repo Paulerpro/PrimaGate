@@ -28,6 +28,7 @@ from primagate.drivers._shared import (
 )
 from primagate.drivers.cache import ResponseCache
 from primagate.drivers.capacity import AnalyzerCap
+from primagate.drivers.profile_store import ProfileStore, default_profile_store
 from primagate.drivers.providers import (
     ProviderRouting,
     SettingsResolver,
@@ -137,6 +138,7 @@ class AsyncDriver:
         tier_routing: TierRouting | None = None,
         analyzer_cap: AnalyzerCap | None = None,
         spend: SpendTracker | None = None,
+        profile_store: ProfileStore | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -152,6 +154,7 @@ class AsyncDriver:
         self._tier_routing = tier_routing
         self._analyzer_cap = analyzer_cap
         self._spend = spend or SpendTracker()
+        self._profile_store = default_profile_store() if profile_store is None else profile_store
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -173,6 +176,7 @@ class AsyncDriver:
         tier_routing: TierRouting | None = None,
         analyzer_cap: AnalyzerCap | None = None,
         spend: SpendTracker | None = None,
+        profile_store: ProfileStore | None = None,
     ) -> AsyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -189,6 +193,7 @@ class AsyncDriver:
             tier_routing=tier_routing,
             analyzer_cap=analyzer_cap,
             spend=spend,
+            profile_store=profile_store,
         )
 
     async def aclose(self) -> None:
@@ -331,6 +336,21 @@ class AsyncDriver:
         self._cache.put(action.key, action.response)
         return steps.CacheWriteOutcome()
 
+    async def _store_read(self, action: steps.StoreRead) -> Step:
+        store = self._profile_store
+        # Only a store that promises never to wait may run on the loop; any other could stall
+        # every task sharing it.
+        found = store.read() if store.non_blocking else await asyncio.to_thread(store.read)
+        return steps.StoreReadOutcome(found)
+
+    async def _store_write(self, action: steps.StoreWrite) -> Step:
+        store = self._profile_store
+        if store.non_blocking:
+            store.write(action.profile)
+        else:
+            await asyncio.to_thread(store.write, action.profile)
+        return steps.StoreWriteOutcome()
+
     async def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -350,4 +370,6 @@ class AsyncDriver:
         steps.CountTokens: _count,
         steps.CacheRead: _cache_read,
         steps.CacheWrite: _cache_write,
+        steps.StoreRead: _store_read,
+        steps.StoreWrite: _store_write,
     }

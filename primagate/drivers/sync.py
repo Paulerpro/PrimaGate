@@ -28,6 +28,7 @@ from primagate.drivers._shared import (
 )
 from primagate.drivers.cache import ResponseCache
 from primagate.drivers.capacity import AnalyzerCap
+from primagate.drivers.profile_store import ProfileStore, default_profile_store
 from primagate.drivers.providers import (
     ProviderRouting,
     SettingsResolver,
@@ -136,6 +137,7 @@ class SyncDriver:
         tier_routing: TierRouting | None = None,
         analyzer_cap: AnalyzerCap | None = None,
         spend: SpendTracker | None = None,
+        profile_store: ProfileStore | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -151,6 +153,7 @@ class SyncDriver:
         self._tier_routing = tier_routing
         self._analyzer_cap = analyzer_cap
         self._spend = spend or SpendTracker()
+        self._profile_store = default_profile_store() if profile_store is None else profile_store
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -172,6 +175,7 @@ class SyncDriver:
         tier_routing: TierRouting | None = None,
         analyzer_cap: AnalyzerCap | None = None,
         spend: SpendTracker | None = None,
+        profile_store: ProfileStore | None = None,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -188,6 +192,7 @@ class SyncDriver:
             tier_routing=tier_routing,
             analyzer_cap=analyzer_cap,
             spend=spend,
+            profile_store=profile_store,
         )
 
     def close(self) -> None:
@@ -325,6 +330,13 @@ class SyncDriver:
         self._cache.put(action.key, action.response)
         return steps.CacheWriteOutcome()
 
+    def _store_read(self, action: steps.StoreRead) -> Step:
+        return steps.StoreReadOutcome(self._profile_store.read())
+
+    def _store_write(self, action: steps.StoreWrite) -> Step:
+        self._profile_store.write(action.profile)
+        return steps.StoreWriteOutcome()
+
     def _return(self, action: steps.Return) -> Step:
         return Finished(action.response)
 
@@ -344,4 +356,6 @@ class SyncDriver:
         steps.CountTokens: _count,
         steps.CacheRead: _cache_read,
         steps.CacheWrite: _cache_write,
+        steps.StoreRead: _store_read,
+        steps.StoreWrite: _store_write,
     }

@@ -9,13 +9,25 @@ import pytest
 
 import primagate
 from primagate.core import profile as core_profile
+from primagate.core.call import advance
 from primagate.core.profile import (
     check_sources,
     empty_profile,
     input_fingerprint,
     parse_profile,
+    read_profile,
     usable_profile,
+    write_profile,
 )
+from primagate.core.steps import (
+    Action,
+    Raise,
+    StoreRead,
+    StoreReadOutcome,
+    StoreWrite,
+    StoreWriteOutcome,
+)
+from primagate.schema.errors import PrimaGateError
 from primagate.schema.profile import (
     PREPARATION_OVERFLOW,
     PROFILE_SCHEMA_VERSION,
@@ -382,3 +394,51 @@ def test_core_makes_no_id_and_reads_no_clock() -> None:
 def test_the_profile_adds_no_public_name() -> None:
     for name in ("Profile", "ProfileSources", "PREPARATION_OVERFLOW", "ProfileContent"):
         assert not hasattr(primagate, name)
+
+
+_NEXT = Raise(PrimaGateError("next"))
+
+
+def _read_through(stored: Profile | None, fingerprint: str = FP) -> list[Profile | None]:
+    got: list[Profile | None] = []
+
+    def then(found: Profile | None) -> Action:
+        got.append(found)
+        return _NEXT
+
+    action = read_profile(fingerprint, then)
+    assert isinstance(action, StoreRead)
+    assert advance(action, StoreReadOutcome(stored)) is _NEXT
+    return got
+
+
+def test_read_profile_asks_the_store_and_passes_on_a_usable_profile() -> None:
+    assert _read_through(PROFILE) == [PROFILE]
+    assert _read_through(PROFILE)[0] is PROFILE
+
+
+def test_read_profile_turns_a_stale_profile_into_a_miss() -> None:
+    assert _read_through(PROFILE, _fp(prompt="prep-2")) == [None]
+
+
+@pytest.mark.parametrize("version", [PROFILE_SCHEMA_VERSION + 1, PROFILE_SCHEMA_VERSION - 1])
+def test_read_profile_turns_an_other_schema_profile_into_a_miss(version: int) -> None:
+    old = dataclasses.replace(PROFILE, schema_version=version)
+    assert _read_through(old) == [None]
+
+
+def test_read_profile_passes_an_empty_store_on_as_a_miss() -> None:
+    assert _read_through(None) == [None]
+
+
+def test_write_profile_asks_the_store_then_goes_on() -> None:
+    action = write_profile(PROFILE, _NEXT)
+    assert isinstance(action, StoreWrite)
+    assert action.profile is PROFILE
+    assert advance(action, StoreWriteOutcome()) is _NEXT
+
+
+def test_a_store_outcome_for_the_wrong_action_is_refused() -> None:
+    action = write_profile(PROFILE, _NEXT)
+    following = advance(action, StoreReadOutcome(PROFILE))
+    assert isinstance(following, Raise)

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
 from primagate.core.counting import heuristic_count
+from primagate.core.steps import Action, StoreRead, StoreWrite
 from primagate.schema.profile import (
     PREPARATION_OVERFLOW,
     PROFILE_SCHEMA_VERSION,
@@ -70,6 +71,20 @@ def usable_profile(
     if stored.input_fingerprint != fingerprint or stored.schema_version != schema_version:
         return None
     return stored
+
+
+def read_profile(fingerprint: str, then: Callable[[Profile | None], Action]) -> StoreRead:
+    """Ask for the stored Profile and hand `then` it, or None when it is missing or no longer fits.
+
+    The fit is judged here rather than in the store, so a stale or old-schema Profile is a miss
+    whichever store holds it.
+    """
+    return StoreRead(lambda read: then(usable_profile(read.profile, fingerprint)))
+
+
+def write_profile(profile: Profile, then: Action) -> StoreWrite:
+    """Store `profile` in place of whatever the store held, then go on with `then`."""
+    return StoreWrite(profile, then)
 
 
 def check_sources(sources: ProfileSources, limit: int) -> str | PreparationOverflow:
