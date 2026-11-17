@@ -1,6 +1,8 @@
 import asyncio
+import os
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -206,6 +208,7 @@ def test_a_caller_store_serves_both_modes(gates: list[PrimaGate]) -> None:
 
 
 def test_the_store_and_registry_add_no_public_name() -> None:
+    # FileProfileStore is the one store a caller builds, so it alone is public.
     for name in (
         "ProfileStore",
         "ModelRegistry",
@@ -214,3 +217,107 @@ def test_the_store_and_registry_add_no_public_name() -> None:
         "default_profile_store",
     ):
         assert not hasattr(primagate, name), name
+
+
+def test_a_file_store_round_trips_through_the_driver(mode: str, tmp_path: Path) -> None:
+    driver = _driver(mode, primagate.FileProfileStore(tmp_path / "profile.json"))
+    assert _read(driver) == [None]
+    _write(driver, PROFILE)
+    assert _read(driver) == [PROFILE]
+
+
+def test_a_file_store_profile_is_reused_by_a_new_driver(mode: str, tmp_path: Path) -> None:
+    path = tmp_path / "profile.json"
+    _write(_driver(mode, primagate.FileProfileStore(path)), PROFILE)
+    assert _read(_driver(mode, primagate.FileProfileStore(path))) == [PROFILE]
+
+
+def test_a_stale_or_old_schema_file_reaches_core_as_a_miss(mode: str, tmp_path: Path) -> None:
+    store = primagate.FileProfileStore(tmp_path / "profile.json")
+    driver = _driver(mode, store)
+    _write(driver, PROFILE)
+    assert _read(driver, "fp-moved") == [None]
+    for version in (PROFILE_SCHEMA_VERSION + 1, PROFILE_SCHEMA_VERSION - 1):
+        old = Profile(**{**PROFILE.__dict__, "schema_version": version})
+        _write(driver, old)
+        assert _read(driver) == [None]
+        # Version 0 is not a valid Profile at all, so the store already reads it as a miss.
+        assert store.read() == (old if version >= 1 else None)
+
+
+@pytest.mark.parametrize("content", [b'{"profile_id": "p"', b"\xff\xfe", b'{"extra": 1}'])
+def test_a_corrupt_file_is_a_miss_then_overwritten(
+    mode: str, tmp_path: Path, content: bytes
+) -> None:
+    path = tmp_path / "profile.json"
+    path.write_bytes(content)
+    driver = _driver(mode, primagate.FileProfileStore(path))
+    assert _read(driver) == [None]
+    _write(driver, PROFILE)
+    assert _read(driver) == [PROFILE]
+
+
+def test_a_file_store_creates_a_missing_directory(mode: str, tmp_path: Path) -> None:
+    driver = _driver(mode, primagate.FileProfileStore(tmp_path / "dir" / "sub" / "p.json"))
+    _write(driver, PROFILE)
+    assert _read(driver) == [PROFILE]
+
+
+def test_a_file_store_os_error_propagates(mode: str, tmp_path: Path) -> None:
+    path = tmp_path / "profile.json"
+    path.mkdir()
+    driver = _driver(mode, primagate.FileProfileStore(path))
+    with pytest.raises(OSError):
+        _read(driver)
+    with pytest.raises(OSError):
+        _write(driver, PROFILE)
+
+
+def test_a_failed_file_write_keeps_the_old_profile(
+    mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    driver = _driver(mode, primagate.FileProfileStore(tmp_path / "profile.json"))
+    _write(driver, PROFILE)
+
+    def fail(*args: Any) -> None:
+        raise Boom("replace")
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.raises(Boom, match="replace"):
+        _write(driver, Profile(**{**PROFILE.__dict__, "profile_id": "p2"}))
+    monkeypatch.undo()
+    assert _read(driver) == [PROFILE]
+    assert [p.name for p in tmp_path.iterdir()] == ["profile.json"]
+
+
+class ThreadNotingFileStore(primagate.FileProfileStore):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.threads: list[int] = []
+
+    def read(self) -> Profile | None:
+        self.threads.append(threading.get_ident())
+        return super().read()
+
+    def write(self, profile: Profile) -> None:
+        self.threads.append(threading.get_ident())
+        super().write(profile)
+
+
+def test_the_async_driver_runs_the_file_store_in_a_worker_thread(tmp_path: Path) -> None:
+    store = ThreadNotingFileStore(tmp_path / "profile.json")
+    loop_thread, ran_on = _async_threads(store)  # type: ignore[arg-type]
+    assert len(ran_on) == 2
+    assert loop_thread not in ran_on
+    assert store.read() == PROFILE
+
+
+def test_a_gate_on_a_file_store_reuses_the_profile_after_a_restart(
+    gates: list[PrimaGate], mode: str, tmp_path: Path
+) -> None:
+    path = tmp_path / "profile.json"
+    before = _gate(gates, profile_store=primagate.FileProfileStore(path))
+    _write(_driver_of(before, mode), PROFILE)
+    after = _gate(gates, profile_store=primagate.FileProfileStore(path))
+    assert _read(_driver_of(after, mode)) == [PROFILE]
+    assert _read(_driver_of(after, mode), "fp-moved") == [None]

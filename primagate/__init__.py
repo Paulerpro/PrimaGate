@@ -35,6 +35,7 @@ from primagate.schema.events import (
 )
 from primagate.schema.policy import TIER_ROUTING_ALIAS
 from primagate.schema.tiers import UNKNOWN, Unknown
+from primagate.stores.file import FileProfileStore
 
 __version__ = "0.1.0"
 
@@ -60,6 +61,7 @@ __all__ = [
     "DispatchFailed",
     "DispatchStarted",
     "Event",
+    "FileProfileStore",
     "ImageFetchError",
     "LowConfidenceDowngrade",
     "NotFoundError",

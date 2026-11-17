@@ -712,13 +712,18 @@ guessed at. An answer below your `confidence_threshold` is not a failure: it tak
 cost of your worker model.
 
 Each instance holds a Profile store, kept in memory by default and shared by `completion` and
-`acompletion`. Nothing goes to disk, so it is empty after a restart. Until Profiles are prepared it
-is never read or written; `profile_store=` is there so another store can be plugged in later. A
-custom store needs a `non_blocking` flag and plain (not `async def`), thread-safe `read()` and
-`write(profile)` methods. `read()` returns the stored Profile or `None`, and `write` replaces it, so
+`acompletion`. The default in-memory store writes nothing to disk, so it is empty after a restart.
+Until Profiles are prepared the store is never read or written; `profile_store=` is there so
+another store can be plugged in. A custom store needs a `non_blocking` flag and plain (not
+`async def`), thread-safe `read()` and `write(profile)` methods. `read()` returns the stored Profile or `None`, and `write` replaces it, so
 a reader sees the old Profile or the new one, never a mix. Errors it raises reach the caller
 unchanged. If `non_blocking` is false, async calls run `read()` and `write()` in a worker thread so
 your event loop is never held up.
+
+`profile_store=primagate.FileProfileStore("profile.json")` keeps the Profile in a file, so once
+Profiles are prepared it is reused across restarts. They are not prepared yet, so for now the file
+is never written. Its format, how it is versioned and its limits when several processes share one
+file are in [docs/profile-store.md](docs/profile-store.md).
 
 ## Notes
 
