@@ -37,6 +37,8 @@ from primagate.core.steps import (
     EmitOutcome,
     IdOutcome,
     NewId,
+    Now,
+    NowOutcome,
     Outcome,
     Plan,
     Raise,
@@ -409,7 +411,11 @@ def next_action(action: Action, outcome: Outcome) -> Action:
             analyzer=action.analyzer,
         )
         return Return(dataclasses.replace(outcome.response, metadata=metadata))
-    if isinstance(action, Random) and isinstance(outcome, RandomOutcome):
+    if (
+        isinstance(action, Random)
+        and isinstance(outcome, RandomOutcome)
+        and isinstance(action.resume, Dispatch)
+    ):
         resume = action.resume
         policy = resume.route.policy if resume.route else DEFAULT_RETRY
         return Sleep(_delay(policy, resume.retries, outcome.value), resume)
@@ -595,6 +601,21 @@ def advance(action: Action, outcome: Outcome) -> Action:
     """Like `next_action`, and also says what happened so the driver can deliver the events."""
     if isinstance(action, NewId) and isinstance(outcome, IdOutcome):
         return action.resume(outcome.value)
+    if isinstance(action, Now) and isinstance(outcome, NowOutcome):
+        return action.resume(outcome.value)
+    # A wait that is not a call's retry carries its own next step, and no call events.
+    if (
+        isinstance(action, Random)
+        and isinstance(outcome, RandomOutcome)
+        and not isinstance(action.resume, Dispatch)
+    ):
+        return action.resume(outcome.value)
+    if (
+        isinstance(action, Sleep)
+        and isinstance(outcome, SleepOutcome)
+        and not isinstance(action.resume, Dispatch)
+    ):
+        return action.resume
     if isinstance(action, Emit) and isinstance(outcome, EmitOutcome):
         return action.resume
     if isinstance(action, CountTokens) and isinstance(outcome, CountOutcome):
@@ -709,7 +730,7 @@ def _counted(action: Dispatch, answered: ChatCompletion, counted: CountOutcome) 
 def _request_id(action: Action) -> str:
     if isinstance(action, Dispatch):
         return action.request_id
-    if isinstance(action, Random | Sleep):
+    if isinstance(action, Random | Sleep) and isinstance(action.resume, Dispatch):
         return action.resume.request_id
     return ""
 
@@ -762,7 +783,11 @@ def _announce(action: Action, outcome: Outcome, following: Action) -> tuple[even
             if metadata is not None and metadata.unknown_model:
                 return (events.CostUnknown(rid, _model(action)), *done)
             return done
-    if isinstance(action, Random) and isinstance(following, Sleep):
+    if (
+        isinstance(action, Random)
+        and isinstance(following, Sleep)
+        and isinstance(following.resume, Dispatch)
+    ):
         resume = following.resume
         return (
             events.RetryScheduled(

@@ -155,9 +155,18 @@ def parse_profile(raw: object) -> Profile:
         input_fingerprint=raw["input_fingerprint"],
         schema_version=version,
         created_at=_timestamp(raw["created_at"]),
-        content=_content(raw["content"]),
+        content=parse_content(raw["content"]),
         source_ref=raw["source_ref"],
     )
+
+
+def parse_content(raw: object) -> ProfileContent:
+    """Read a mapping as Profile content, or raise `InvalidProfileError` naming the field.
+
+    One set of rules for stored and freshly prepared content, so preparation can never write a
+    Profile that a store would refuse to read back.
+    """
+    return _content(raw)
 
 
 def _non_empty(name: str, value: object) -> None:

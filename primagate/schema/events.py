@@ -6,6 +6,8 @@ from typing import Any, ClassVar, Literal
 
 # What the SDK does after a failed dispatch.
 NextStep = Literal["retry", "next_endpoint", "next_attempt", "raise"]
+# Why a Profile preparation failed: a fixed set of names, never provider or Analyzer text.
+PrepFailureReason = Literal["overflow", "provider_error", "malformed_output"]
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,46 @@ class SpendingCeilingExceeded(Event):
     total: float
 
 
+@dataclass(frozen=True)
+class PreparationStarted(Event):
+    """A Profile is being prepared from the declared sources.
+
+    Every preparation event has a `request_id` starting with `prep-`, which becomes the Profile's
+    id if it succeeds. None carries source text or anything the Analyzer said.
+    """
+
+    event_type: ClassVar[str] = "preparation_started"
+
+    input_fingerprint: str
+    prep_prompt_version: str
+
+
+@dataclass(frozen=True)
+class PreparationFailed(Event):
+    """One preparation attempt failed; `final` says whether the preparation gave up with it."""
+
+    event_type: ClassVar[str] = "preparation_failed"
+    log_level: ClassVar[int] = logging.WARNING
+
+    input_fingerprint: str
+    prep_prompt_version: str
+    reason: PrepFailureReason
+    # The attempt that failed, from 1; 0 when it failed before anything was sent.
+    attempt: int
+    final: bool
+
+
+@dataclass(frozen=True)
+class ProfileReady(Event):
+    """A prepared Profile was written to the store."""
+
+    event_type: ClassVar[str] = "profile_ready"
+
+    input_fingerprint: str
+    prep_prompt_version: str
+    profile_id: str
+
+
 EVENT_CLASSES: tuple[type[Event], ...] = (
     DispatchStarted,
     DispatchFailed,
@@ -195,6 +237,9 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     PremiumRoutingSelected,
     RoutingDegraded,
     SpendingCeilingExceeded,
+    PreparationStarted,
+    PreparationFailed,
+    ProfileReady,
 )
 EVENT_TYPES: tuple[str, ...] = tuple(cls.event_type for cls in EVENT_CLASSES)
 # Names the package root re-exports.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Final
 
 # Bumped whenever the shape below changes, so a stored Profile of an older shape is never reused.
@@ -40,6 +41,14 @@ class PreparationOverflow:
 
 
 PREPARATION_OVERFLOW: Final = PreparationOverflow()
+
+
+class PrepState(Enum):
+    """Where preparation stands for one fingerprint. Values only: nothing persists them."""
+
+    PREPARING = "preparing"
+    READY = "ready"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)

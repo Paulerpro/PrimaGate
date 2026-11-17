@@ -15,6 +15,7 @@ from primagate.core.prices import estimate
 from primagate.drivers.providers import SettingsSource
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import Event
+from primagate.schema.profile import PrepState, Profile
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, Metadata
 from primagate.schema.wire import ProviderRequest, ProviderSettings, RawEvent, RawOutcome
 
@@ -55,7 +56,15 @@ class Finished:
     response: ChatCompletion
 
 
-Step = steps.Outcome | Finished
+@dataclass(frozen=True)
+class Prepared:
+    """How a preparation ended: its state, and the Profile it wrote when READY."""
+
+    state: PrepState
+    profile: Profile | None
+
+
+Step = steps.Outcome | Finished | Prepared
 
 
 def credentials(settings: SettingsSource, action: steps.Dispatch) -> ProviderSettings:

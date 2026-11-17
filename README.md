@@ -217,9 +217,18 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
   ends with `cache_hit` instead.
 - `routing_decision`, `low_confidence_downgrade`, `premium_routing_selected` and
   `routing_degraded`: decision events for Tier Routing (see steps 13 and 16).
-- `spending_ceiling_exceeded`: routed calls have cost more than your Policy's
-  `spending_ceiling`, and says how much: it carries the `ceiling` and the `total`, in US dollars
-  and estimated from the price map (see step 15).
+- `spending_ceiling_exceeded`: routed calls, together with Profile preparation's Analyzer
+  requests, have cost more than your Policy's `spending_ceiling`, and says how much: it carries
+  the `ceiling` and the `total`, in US dollars and estimated from the price map (see step 15).
+  When a preparation request is the one that passes it, its `request_id` starts with `prep-`.
+- `preparation_started`, `preparation_failed` and `profile_ready`: PrimaGate is turning your
+  Profile sources into a Profile. Preparation does not run on its own yet, so for now you will
+  not see these. They belong to the preparation, not to a call, so their `request_id` starts
+  with `prep-`. Each carries the `input_fingerprint` and the `prep_prompt_version`.
+  `preparation_failed` is a warning that adds a `reason` (`overflow`, `provider_error` or
+  `malformed_output`), the `attempt` number (0 when nothing was sent) and whether it was
+  `final`. `profile_ready` adds the `profile_id`, which is the preparation's `prep-` id. They
+  never carry your sources or what the Analyzer said.
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
 names and status codes, never message text, error text or keys. Your handler must be quick and

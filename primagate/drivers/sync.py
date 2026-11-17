@@ -4,6 +4,7 @@ import random
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, ClassVar, Self
 
@@ -14,11 +15,13 @@ from primagate.core.analyzer import begin_analysis, finish_analysis
 from primagate.core.call import advance, parse_drop_params, start
 from primagate.core.context import RoutingContext
 from primagate.core.ports import Adapter
+from primagate.core.preparation import begin_preparation
 from primagate.core.prices import BUNDLED, PriceTable
 from primagate.drivers._shared import (
     END,
     EventHandler,
     Finished,
+    Prepared,
     Step,
     StreamState,
     credentials,
@@ -38,9 +41,9 @@ from primagate.drivers.providers import (
 from primagate.drivers.spend import SpendTracker
 from primagate.drivers.tokens import TokenCounting
 from primagate.schema.analyzer import Analysis, AnalyzerFailure
-from primagate.schema.errors import PrimaGateError
+from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.policy import Policy, TierRouting
-from primagate.schema.profile import ProfileContent
+from primagate.schema.profile import ProfileContent, ProfileSources
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
 from primagate.schema.wire import (
     DEFAULT_RETRY,
@@ -223,6 +226,8 @@ class SyncDriver:
             step = self.perform(action)
             if isinstance(step, Finished):
                 return step.response
+            if isinstance(step, Prepared):
+                raise PrimaGateError("A call ended as a preparation")
             action = advance(action, step)
 
     def stream(self, request: ChatCompletionRequest, drop_params: object = None) -> SyncStream:
@@ -235,7 +240,7 @@ class SyncDriver:
                 step: steps.Outcome = opened
             else:
                 performed = self.perform(action)
-                if isinstance(performed, Finished):
+                if isinstance(performed, Finished | Prepared):
                     raise PrimaGateError("Stream request produced no dispatch")
                 step = performed
             action = advance(action, step)
@@ -254,6 +259,32 @@ class SyncDriver:
         except PrimaGateError as err:
             return steps.DispatchOutcome(error=err)
         return stream
+
+    def prepare(self, sources: ProfileSources, fingerprint: str) -> Prepared:
+        """Prepare a Profile from `sources` now, in the foreground, and store it when READY.
+
+        It uses this instance's Analyzer, prices and Policy ceiling. Provider and answer failures
+        end as FAILED with events; an error raised by the Profile store reaches the caller
+        unchanged.
+        """
+        tiers = self._tier_routing
+        if tiers is None or tiers.analyzer is None:
+            raise BadRequestError("Preparing a Profile needs an analyzer")
+        action = begin_preparation(
+            sources,
+            fingerprint,
+            tiers.analyzer,
+            self._capabilities,
+            self._prices,
+            tiers.policy.spending_ceiling,
+        )
+        while True:
+            step = self.perform(action)
+            if isinstance(step, Prepared):
+                return step
+            if isinstance(step, Finished):
+                raise PrimaGateError("A preparation ended as a call")
+            action = advance(action, step)
 
     def analyze(
         self, model: str, profile: ProfileContent, context: RoutingContext, policy: Policy
@@ -287,7 +318,9 @@ class SyncDriver:
         return settle(self._adapters, self._settings, action, raw)
 
     def _analyze(self, action: steps.Analyze) -> Step:
-        cap = self._analyzer_cap
+        # Preparation never takes a permit: the cap protects request latency, which preparation
+        # does not affect.
+        cap = self._analyzer_cap if action.capped else None
         # Over the limit means no request and no waiting: core sends the call to the Interim
         # Binding instead, so a slow Analyzer cannot hold callers up.
         if cap is not None and not cap.try_acquire():
@@ -313,8 +346,11 @@ class SyncDriver:
         return steps.SleepOutcome()
 
     def _new_id(self, action: steps.NewId) -> Step:
-        # Prefixed so a call's ids never collide with background-preparation ids.
-        return steps.IdOutcome(f"req-{uuid.uuid4().hex}")
+        # Prefixed so a call's ids never collide with preparation ids.
+        return steps.IdOutcome(f"{action.prefix}-{uuid.uuid4().hex}")
+
+    def _now(self, action: steps.Now) -> Step:
+        return steps.NowOutcome(datetime.now(UTC).isoformat())
 
     def _emit(self, action: steps.Emit) -> Step:
         deliver(action.events, self._event_handler)
@@ -343,6 +379,9 @@ class SyncDriver:
     def _raise(self, action: steps.Raise) -> Step:
         raise action.error
 
+    def _preparation_done(self, action: steps.PreparationDone) -> Step:
+        return Prepared(action.state, action.profile)
+
     HANDLERS: ClassVar[dict[type, Callable[[Any, Any], Step]]] = {
         steps.Dispatch: _dispatch,
         steps.Analyze: _analyze,
@@ -352,10 +391,12 @@ class SyncDriver:
         steps.Random: _random,
         steps.Sleep: _sleep,
         steps.NewId: _new_id,
+        steps.Now: _now,
         steps.Emit: _emit,
         steps.CountTokens: _count,
         steps.CacheRead: _cache_read,
         steps.CacheWrite: _cache_write,
         steps.StoreRead: _store_read,
         steps.StoreWrite: _store_write,
+        steps.PreparationDone: _preparation_done,
     }

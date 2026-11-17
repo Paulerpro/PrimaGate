@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from primagate.core.prices import BUNDLED, PriceTable
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import Event
-from primagate.schema.profile import Profile
+from primagate.schema.profile import PrepState, Profile
 from primagate.schema.tiers import Tier
 from primagate.schema.types import (
     AnalyzerUsage,
@@ -95,20 +95,35 @@ class Raise:
 
 @dataclass(frozen=True)
 class Random:
-    """Ask the driver for a random value in [0, 1) to jitter the next delay."""
+    """Ask the driver for a random value in [0, 1) to jitter the next delay.
 
-    resume: Dispatch
+    A call's retry resumes its Dispatch, whose retry policy sets the delay. Any other wait
+    resumes a function that turns the value into its next action.
+    """
+
+    resume: Dispatch | Callable[[float], Action]
 
 
 @dataclass(frozen=True)
 class Sleep:
     seconds: float
-    resume: Dispatch
+    resume: Action
 
 
 @dataclass(frozen=True)
 class NewId:
-    """Ask the driver for this call's request id; `resume` turns it into the next action."""
+    """Ask the driver for a new id; `resume` turns it into the next action.
+
+    The prefix tells a call's events from a preparation's, so the driver must keep it.
+    """
+
+    resume: Callable[[str], Action]
+    prefix: str = "req"
+
+
+@dataclass(frozen=True)
+class Now:
+    """Ask the driver for the current time as ISO 8601 UTC, since core reads no clock."""
 
     resume: Callable[[str], Action]
 
@@ -174,6 +189,9 @@ class Analyze:
 
     dispatch: Dispatch
     resume: Callable[[DispatchOutcome | Declined], Action]
+    # False only for preparation, which runs apart from requests, so it must not take a permit
+    # a request is waiting on.
+    capped: bool = True
 
 
 @dataclass(frozen=True)
@@ -185,6 +203,14 @@ class RecordSpend:
     resume: Callable[[SpendOutcome], Action]
 
 
+@dataclass(frozen=True)
+class PreparationDone:
+    """The end of a preparation: its state, and the Profile it wrote when READY."""
+
+    state: PrepState
+    profile: Profile | None
+
+
 Action = (
     Dispatch
     | Return
@@ -192,6 +218,7 @@ Action = (
     | Random
     | Sleep
     | NewId
+    | Now
     | Emit
     | CountTokens
     | CacheRead
@@ -200,6 +227,7 @@ Action = (
     | StoreWrite
     | Analyze
     | RecordSpend
+    | PreparationDone
 )
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
@@ -210,6 +238,7 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     Random,
     Sleep,
     NewId,
+    Now,
     Emit,
     CountTokens,
     CacheRead,
@@ -218,6 +247,7 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     StoreWrite,
     Analyze,
     RecordSpend,
+    PreparationDone,
 )
 
 
@@ -256,6 +286,11 @@ class SleepOutcome:
 
 @dataclass(frozen=True)
 class IdOutcome:
+    value: str
+
+
+@dataclass(frozen=True)
+class NowOutcome:
     value: str
 
 
@@ -301,6 +336,7 @@ Outcome = (
     | RandomOutcome
     | SleepOutcome
     | IdOutcome
+    | NowOutcome
     | EmitOutcome
     | CountOutcome
     | CacheReadOutcome

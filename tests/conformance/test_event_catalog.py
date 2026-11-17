@@ -38,6 +38,11 @@ EXAMPLES: dict[str, events.Event] = {
     "PremiumRoutingSelected": events.PremiumRoutingSelected("req-1", **DECISION),
     "RoutingDegraded": events.RoutingDegraded("req-1", **DECISION, reason="over_budget"),
     "SpendingCeilingExceeded": events.SpendingCeilingExceeded("req-1", 1.0, 1.5),
+    "PreparationStarted": events.PreparationStarted("prep-a", "fp-1", "prompt-v1"),
+    "PreparationFailed": events.PreparationFailed(
+        "prep-a", "fp-1", "prompt-v1", "malformed_output", 2, False
+    ),
+    "ProfileReady": events.ProfileReady("prep-a", "fp-1", "prompt-v1", "profile-b"),
 }
 
 DECISION_CLASSES = (
