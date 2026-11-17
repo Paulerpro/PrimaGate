@@ -50,6 +50,8 @@ from primagate.core.steps import (
     Sleep,
     SleepOutcome,
     SpendOutcome,
+    StartOutcome,
+    StartPreparation,
     StoreRead,
     StoreReadOutcome,
     StoreWrite,
@@ -525,7 +527,19 @@ def start(
         )
 
     def analyzing(routing: Routing, request_id: str, key: str | None, read_already: bool) -> Action:
-        """Two or more Tiers can serve the request, so the Analyzer chooses between them."""
+        """Two or more Tiers can serve the request, so the Analyzer chooses between them.
+
+        With sources declared, the call first asks for its Profile to be prepared. It never waits
+        on that and chooses the same way whether or not one started, since it reads no Profile.
+        """
+        fingerprint = routing.tiers.fingerprint
+        if fingerprint is None:
+            return choosing(routing, request_id, key, read_already)
+        return StartPreparation(
+            fingerprint, lambda _: choosing(routing, request_id, key, read_already)
+        )
+
+    def choosing(routing: Routing, request_id: str, key: str | None, read_already: bool) -> Action:
         tiers = routing.tiers
         eligible = tuple(t for t, _ in routing.candidates)
         # Only Tiers that can take the request are offered, so the answer is always usable.
@@ -631,6 +645,8 @@ def advance(action: Action, outcome: Outcome) -> Action:
     if isinstance(action, Analyze) and isinstance(outcome, DispatchOutcome | Declined):
         return action.resume(outcome)
     if isinstance(action, RecordSpend) and isinstance(outcome, SpendOutcome):
+        return action.resume(outcome)
+    if isinstance(action, StartPreparation) and isinstance(outcome, StartOutcome):
         return action.resume(outcome)
     following = next_action(action, outcome)
     if (

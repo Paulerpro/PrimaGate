@@ -9,8 +9,8 @@ import primagate
 gate = primagate.PrimaGate(profile_store=primagate.FileProfileStore("profile.json"))
 ```
 
-Profiles are not prepared yet, so for now nothing reads or writes the file. Once they are, the
-store is used as described here.
+Only background preparation reads or writes the file (README step 18): it reads it once when it
+starts, and writes it when a new Profile is ready.
 
 The path may be text or a path object. An empty path, a bytes path, a path object that gives bytes,
 or anything else is refused with `BadRequestError` when the store is built. A relative path is

@@ -13,8 +13,8 @@ from test_retry_routing import _answer as worker_answer
 from primagate import PrimaGate
 from primagate.core.profile import PREP_PROMPT_VERSION, parse_profile
 from primagate.drivers._shared import Prepared
+from primagate.drivers.preparation import PreparationStopped
 from primagate.schema import errors, events
-from primagate.schema.policy import TIER_ROUTING_ALIAS
 from primagate.schema.profile import PROFILE_SCHEMA_VERSION, PrepState, Profile, ProfileSources
 from primagate.stores.memory import InMemoryProfileStore
 
@@ -266,12 +266,19 @@ def test_prepare_without_an_analyzer_is_rejected(mode: str) -> None:
     assert run.prepared == [] and run.others == []
 
 
-def test_a_routed_call_neither_prepares_nor_writes(mode: str) -> None:
-    run = _prep(mode, [])
-    run.call(model=TIER_ROUTING_ALIAS, messages=[{"role": "user", "content": "where is it"}])
-    assert run.prepared == [] and run.stored is None
-    assert not any(t.startswith("prep") or t == "profile_ready" for t in run.types)
-    assert all(e.request_id.startswith("req-") for e in run.handler.seen)
+def test_a_preparation_on_a_closed_instance_stops_before_its_first_step(mode: str) -> None:
+    run = _prep(mode, [GOOD])
+    sync_driver, async_driver = run.gate._get_driver(), run.gate._get_async_driver()
+    run.gate.close()
+    # The same error type as every other use of a closed instance.
+    assert issubclass(PreparationStopped, errors.PrimaGateError)
+    with pytest.raises(errors.PrimaGateError, match="closed") as raised:
+        if mode == "sync":
+            sync_driver.prepare(run.sources, run.fingerprint)
+        else:
+            asyncio.run(async_driver.prepare(run.sources, run.fingerprint))
+    assert isinstance(raised.value, PreparationStopped)
+    assert run.prepared == [] and run.stored is None and run.types == []
 
 
 def test_a_driver_without_tier_routing_cannot_prepare() -> None:

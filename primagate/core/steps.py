@@ -204,6 +204,18 @@ class RecordSpend:
 
 
 @dataclass(frozen=True)
+class StartPreparation:
+    """Ask the driver to start preparing the Profile for `fingerprint` in the background.
+
+    Fire-and-forget: the driver answers at once with whether one started, and the call goes on
+    with `resume` without waiting for any of it.
+    """
+
+    fingerprint: str
+    resume: Callable[[StartOutcome], Action]
+
+
+@dataclass(frozen=True)
 class PreparationDone:
     """The end of a preparation: its state, and the Profile it wrote when READY."""
 
@@ -227,6 +239,7 @@ Action = (
     | StoreWrite
     | Analyze
     | RecordSpend
+    | StartPreparation
     | PreparationDone
 )
 
@@ -247,6 +260,7 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     StoreWrite,
     Analyze,
     RecordSpend,
+    StartPreparation,
     PreparationDone,
 )
 
@@ -272,6 +286,12 @@ class SpendOutcome:
     total: float
     # True only for the first call to take the total past the ceiling.
     crossed: bool
+
+
+@dataclass(frozen=True)
+class StartOutcome:
+    # False when one is already running or done for the fingerprint, or may not start again yet.
+    started: bool
 
 
 @dataclass(frozen=True)
@@ -333,6 +353,7 @@ Outcome = (
     DispatchOutcome
     | Declined
     | SpendOutcome
+    | StartOutcome
     | RandomOutcome
     | SleepOutcome
     | IdOutcome

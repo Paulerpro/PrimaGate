@@ -17,6 +17,7 @@ from primagate.core.context import RoutingContext
 from primagate.core.ports import Adapter
 from primagate.core.preparation import begin_preparation
 from primagate.core.prices import BUNDLED, PriceTable
+from primagate.core.profile import read_profile
 from primagate.drivers._shared import (
     END,
     EventHandler,
@@ -26,11 +27,18 @@ from primagate.drivers._shared import (
     StreamState,
     credentials,
     deliver,
+    logger,
     prepare,
     settle,
 )
 from primagate.drivers.cache import ResponseCache
 from primagate.drivers.capacity import AnalyzerCap
+from primagate.drivers.preparation import (
+    PreparationRunner,
+    PreparationStopped,
+    Progress,
+    StoreFailed,
+)
 from primagate.drivers.profile_store import ProfileStore, default_profile_store
 from primagate.drivers.providers import (
     ProviderRouting,
@@ -42,8 +50,9 @@ from primagate.drivers.spend import SpendTracker
 from primagate.drivers.tokens import TokenCounting
 from primagate.schema.analyzer import Analysis, AnalyzerFailure
 from primagate.schema.errors import BadRequestError, PrimaGateError
+from primagate.schema.events import PrepFailureReason
 from primagate.schema.policy import Policy, TierRouting
-from primagate.schema.profile import ProfileContent, ProfileSources
+from primagate.schema.profile import PrepState, Profile, ProfileContent, ProfileSources
 from primagate.schema.types import ChatCompletion, ChatCompletionChunk, ChatCompletionRequest
 from primagate.schema.wire import (
     DEFAULT_RETRY,
@@ -141,6 +150,7 @@ class SyncDriver:
         analyzer_cap: AnalyzerCap | None = None,
         spend: SpendTracker | None = None,
         profile_store: ProfileStore | None = None,
+        runner: PreparationRunner | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -157,6 +167,8 @@ class SyncDriver:
         self._analyzer_cap = analyzer_cap
         self._spend = spend or SpendTracker()
         self._profile_store = default_profile_store() if profile_store is None else profile_store
+        # None means no sources were declared, so nothing is ever prepared in the background.
+        self._runner = runner
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -179,6 +191,7 @@ class SyncDriver:
         analyzer_cap: AnalyzerCap | None = None,
         spend: SpendTracker | None = None,
         profile_store: ProfileStore | None = None,
+        runner: PreparationRunner | None = None,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -196,6 +209,7 @@ class SyncDriver:
             analyzer_cap=analyzer_cap,
             spend=spend,
             profile_store=profile_store,
+            runner=runner,
         )
 
     def close(self) -> None:
@@ -265,12 +279,16 @@ class SyncDriver:
 
         It uses this instance's Analyzer, prices and Policy ceiling. Provider and answer failures
         end as FAILED with events; an error raised by the Profile store reaches the caller
-        unchanged.
+        unchanged. Once the instance is closed it stops before its next action and raises
+        `PreparationStopped`.
         """
+        return self._drive(self._begin(sources, fingerprint))
+
+    def _begin(self, sources: ProfileSources, fingerprint: str) -> steps.Action:
         tiers = self._tier_routing
         if tiers is None or tiers.analyzer is None:
             raise BadRequestError("Preparing a Profile needs an analyzer")
-        action = begin_preparation(
+        return begin_preparation(
             sources,
             fingerprint,
             tiers.analyzer,
@@ -278,13 +296,83 @@ class SyncDriver:
             self._prices,
             tiers.policy.spending_ceiling,
         )
+
+    def _drive(self, action: steps.Action, progress: Progress | None = None) -> Prepared:
+        """Run a preparation to its end. With `progress`, it is the background job's: what it
+        shows is recorded, and a store error comes out as `StoreFailed`."""
         while True:
-            step = self.perform(action)
+            # Checked before every action, so a closed instance never sends or writes again.
+            if self._runner is not None and self._runner.is_closed:
+                raise PreparationStopped
+            if progress is not None:
+                progress.observe(action)
+            try:
+                step = self.perform(action)
+            except Exception as err:
+                if progress is not None and isinstance(action, steps.StoreRead | steps.StoreWrite):
+                    raise StoreFailed from err
+                raise
             if isinstance(step, Prepared):
                 return step
             if isinstance(step, Finished):
                 raise PrimaGateError("A preparation ended as a call")
             action = advance(action, step)
+
+    def _background(self, sources: ProfileSources, fingerprint: str) -> steps.Action:
+        """A stored Profile that still fits is used as it is; only a miss is prepared."""
+
+        def found(profile: Profile | None) -> steps.Action:
+            if profile is not None:
+                return steps.PreparationDone(PrepState.READY, profile)
+            return self._begin(sources, fingerprint)
+
+        return read_profile(fingerprint, found)
+
+    def _job(self, sources: ProfileSources, fingerprint: str) -> None:
+        """One background preparation, on its own thread. No `Exception` escapes it; anything
+        rarer, such as `SystemExit`, is recorded as a failure and then let through."""
+        runner = self._runner
+        assert runner is not None
+        progress = Progress()
+        reason: PrepFailureReason
+        try:
+            prepared = self._drive(self._background(sources, fingerprint), progress)
+        except PreparationStopped:
+            return
+        except StoreFailed:
+            reason = "store_error"
+        except Exception:
+            # DEBUG only: the message may echo provider text, and the event already says it failed.
+            logger.debug("preparation failed unexpectedly", exc_info=True)
+            reason = "provider_error"
+        except BaseException:
+            # Recorded first, or the fingerprint would stay PREPARING for the life of the process.
+            runner.finish(fingerprint, PrepState.FAILED)
+            raise
+        else:
+            runner.finish(fingerprint, prepared.state, progress.reason)
+            return
+        # A closed instance stops quietly, even when closing it is what broke the job.
+        if runner.is_closed:
+            return
+        try:
+            deliver((progress.failed(fingerprint, reason),), self._event_handler)
+        finally:
+            runner.finish(fingerprint, PrepState.FAILED, reason)
+
+    def _start_preparation(self, action: steps.StartPreparation) -> Step:
+        runner, tiers = self._runner, self._tier_routing
+        # Only the instance's own sources are ever prepared, under their own fingerprint.
+        if (
+            runner is None
+            or tiers is None
+            or tiers.sources is None
+            or tiers.fingerprint != action.fingerprint
+        ):
+            return steps.StartOutcome(False)
+        sources, fingerprint = tiers.sources, tiers.fingerprint
+        started = runner.start_thread(fingerprint, lambda: self._job(sources, fingerprint))
+        return steps.StartOutcome(started)
 
     def analyze(
         self, model: str, profile: ProfileContent, context: RoutingContext, policy: Policy
@@ -386,6 +474,7 @@ class SyncDriver:
         steps.Dispatch: _dispatch,
         steps.Analyze: _analyze,
         steps.RecordSpend: _record_spend,
+        steps.StartPreparation: _start_preparation,
         steps.Return: _return,
         steps.Raise: _raise,
         steps.Random: _random,

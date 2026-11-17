@@ -60,6 +60,7 @@ def test_closed_action_set_is_exactly_the_actions_core_can_ask_for() -> None:
         "StoreWrite",
         "Analyze",
         "RecordSpend",
+        "StartPreparation",
         "PreparationDone",
     }
 

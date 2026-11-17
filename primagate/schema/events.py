@@ -7,7 +7,7 @@ from typing import Any, ClassVar, Literal
 # What the SDK does after a failed dispatch.
 NextStep = Literal["retry", "next_endpoint", "next_attempt", "raise"]
 # Why a Profile preparation failed: a fixed set of names, never provider or Analyzer text.
-PrepFailureReason = Literal["overflow", "provider_error", "malformed_output"]
+PrepFailureReason = Literal["overflow", "provider_error", "malformed_output", "store_error"]
 
 
 @dataclass(frozen=True)

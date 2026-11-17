@@ -15,6 +15,7 @@ from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.cache import DEFAULT_MAX_ENTRIES, ResponseCache
 from primagate.drivers.capacity import DEFAULT_MAX_CONCURRENT_ANALYZER_CALLS, AnalyzerCap
+from primagate.drivers.preparation import PreparationRunner
 from primagate.drivers.profile_store import ProfileStore, default_profile_store
 from primagate.drivers.providers import (
     check_drop_params,
@@ -168,6 +169,13 @@ class PrimaGate:
         self._cache = ResponseCache(_cache_size(cache_max_entries), secrets.token_bytes(16))
         # One for both drivers, so a Profile written in one mode is read in the other.
         self._profile_store = default_profile_store() if profile_store is None else profile_store
+        # One for both drivers, so a sync call and an async call never both start a preparation.
+        # None when no sources were declared, since there is then nothing to prepare.
+        self._runner = (
+            PreparationRunner()
+            if self._tier_routing is not None and self._tier_routing.fingerprint is not None
+            else None
+        )
         self._event_handler = event_handler
         self._payload_retention = payload_retention
         self._drop_params = drop_params
@@ -231,16 +239,26 @@ class PrimaGate:
         return self._drop_params if value is None else value
 
     def close(self) -> None:
-        """Close the sync client. Async clients are released by `aclose()`."""
+        """Close the sync client and stop background preparation. Async clients are released by
+        `aclose()`.
+
+        A preparation still running stops before its next step and writes nothing.
+        """
         with self._lock:
             self._closed = True
+            # Before the transport, so a preparation sees it was stopped rather than broken.
+            if self._runner is not None:
+                self._runner.close()
             if self._driver is not None:
                 self._driver.close()
 
     async def aclose(self) -> None:
+        """Close both clients, and cancel and wait for preparation tasks on this event loop."""
         with self._lock:
             self._closed = True
             driver, async_driver = self._driver, self._async_driver
+        if self._runner is not None:
+            await self._runner.aclose()
         if driver is not None:
             driver.close()
         if async_driver is not None:
@@ -267,6 +285,7 @@ class PrimaGate:
                     analyzer_cap=self._analyzer_cap,
                     spend=self._spend,
                     profile_store=self._profile_store,
+                    runner=self._runner,
                 )
             return self._driver
 
@@ -291,6 +310,7 @@ class PrimaGate:
                     analyzer_cap=self._analyzer_cap,
                     spend=self._spend,
                     profile_store=self._profile_store,
+                    runner=self._runner,
                 )
             return self._async_driver
 

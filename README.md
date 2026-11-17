@@ -222,20 +222,21 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
   the `ceiling` and the `total`, in US dollars and estimated from the price map (see step 15).
   When a preparation request is the one that passes it, its `request_id` starts with `prep-`.
 - `preparation_started`, `preparation_failed` and `profile_ready`: PrimaGate is turning your
-  Profile sources into a Profile. Preparation does not run on its own yet, so for now you will
-  not see these. They belong to the preparation, not to a call, so their `request_id` starts
+  Profile sources into a Profile in the background. It starts on the first routed request
+  (step 18). They belong to the preparation, not to a call, so their `request_id` starts
   with `prep-`. Each carries the `input_fingerprint` and the `prep_prompt_version`.
-  `preparation_failed` is a warning that adds a `reason` (`overflow`, `provider_error` or
-  `malformed_output`), the `attempt` number (0 when nothing was sent) and whether it was
-  `final`. `profile_ready` adds the `profile_id`, which is the preparation's `prep-` id. They
-  never carry your sources or what the Analyzer said.
+  `preparation_failed` is a warning that adds a `reason` (`overflow`, `provider_error`,
+  `malformed_output` or `store_error`, when your Profile store raised), the `attempt` number (0
+  when nothing was sent) and whether it was `final`. `profile_ready` adds the `profile_id`, which
+  is the preparation's `prep-` id. They never carry your sources or what the Analyzer said.
 
 An event says what happened, not what was said: it carries model names, endpoints, error class
 names and status codes, never message text, error text or keys. Your handler must be quick and
-safe to call from several threads. If it raises, PrimaGate logs the traceback and carries on;
-the one exception is cancellation, which always propagates. A stream that opens
-successfully reports its start but not `call_succeeded`, and a failure after its first chunk
-is not reported.
+safe to call from several threads: besides your own calls, preparation (step 18) calls it from its
+daemon thread, or from a background task on your event loop. If it raises, PrimaGate logs the
+traceback and carries on; the one exception is cancellation, which always propagates. A stream
+that opens successfully reports its start but not `call_succeeded`, and a failure after its first
+chunk is not reported.
 
 ### 9. Keep conversations out of your logs
 
@@ -671,8 +672,9 @@ when the prompt that prepares it or the shape of a Profile has changed. The `ana
 as written, so when the provider changes the model behind an undated alias such as `gpt-4o-mini`,
 the Profile is not prepared again. Name a dated model version if the fingerprint should follow
 the exact model. Prices, Tier Bindings and the rest of the Policy are not part
-of the fingerprint. Profiles are not prepared from the sources yet, so for now declaring them changes no call and
-they are sent nowhere.
+of the fingerprint. The first routed request prepares a Profile from the sources in the background
+(step 18), which sends them to the Analyzer's provider. Routing does not read that Profile yet, so
+for now declaring sources changes no call's routing.
 
 ### 16. Ask for Tier Routing
 
@@ -748,9 +750,9 @@ worker model, and you choose it. It runs in your process with your own keys, and
 it only this:
 
 - The Profile of your app: what your instructions, tool descriptions and skill descriptions say
-  about it, once they have been boiled down. Profiles are not prepared yet, so for now it only
-  says that all of that is unknown. When they are, the sources are sent to the Analyzer's provider
-  to make the Profile.
+  about it, once they have been boiled down. Routing does not read the prepared Profile yet, so
+  for now it only says that all of that is unknown. Preparing the Profile (step 18) sends the
+  sources themselves to the Analyzer's provider.
 - A bounded slice of the recent conversation: the latest turn in full, plus at most three earlier
   turns that fit your `context_token_budget` (step 15). That includes the tool calls the assistant
   made, with their arguments, and the tool results. System and developer messages and images are
@@ -768,17 +770,51 @@ cost of your worker model.
 
 Each instance holds a Profile store, kept in memory by default and shared by `completion` and
 `acompletion`. The default in-memory store writes nothing to disk, so it is empty after a restart.
-Until Profiles are prepared the store is never read or written; `profile_store=` is there so
-another store can be plugged in. A custom store needs a `non_blocking` flag and plain (not
-`async def`), thread-safe `read()` and `write(profile)` methods. `read()` returns the stored Profile or `None`, and `write` replaces it, so
-a reader sees the old Profile or the new one, never a mix. Errors it raises reach the caller
-unchanged. If `non_blocking` is false, async calls run `read()` and `write()` in a worker thread so
-your event loop is never held up.
+Only background preparation (step 18) reads or writes it; a call never does. `profile_store=` is
+there so another store can be plugged in. A custom store needs a `non_blocking` flag and plain (not
+`async def`), thread-safe `read()` and `write(profile)` methods. `read()` returns the stored
+Profile or `None`, and `write` replaces it, so a reader sees the old Profile or the new one, never
+a mix. An error your store raises during preparation ends that preparation as a `store_error`
+failure (step 8); it never reaches your calls. If `non_blocking` is false, `read()` and `write()`
+run in a worker thread when preparing from `acompletion`, so your event loop is never held up.
 
-`profile_store=primagate.FileProfileStore("profile.json")` keeps the Profile in a file, so once
-Profiles are prepared it is reused across restarts. They are not prepared yet, so for now the file
-is never written. Its format, how it is versioned and its limits when several processes share one
+`profile_store=primagate.FileProfileStore("profile.json")` keeps the Profile in a file, so a
+prepared Profile is reused across restarts with no new Analyzer request, as long as its fingerprint
+still matches. Its format, how it is versioned and its limits when several processes share one
 file are in [docs/profile-store.md](docs/profile-store.md).
+
+### 18. Background preparation and closing
+
+Preparing the Profile is the only work PrimaGate does in the background. Nothing else runs outside
+your own calls.
+
+- **When it starts.** On an instance with `profile_sources`, the first routed request
+  (`model=TIER_ROUTING_ALIAS`) with two or more Tiers able to take it starts it. Plain model calls,
+  calls answered from memory and instances without sources never start it. That request does not
+  wait for it and cannot fail because of it: it is routed exactly as before.
+- **How often.** Only one preparation per fingerprint runs at a time, however many requests arrive
+  together. Once it is ready it is not prepared again in this process. With a file store, a
+  matching Profile from an earlier run is reused silently: no Analyzer request and no events.
+- **When it fails.** A final `preparation_failed` event (step 8) says why. A later routed request
+  tries again once 10 minutes have passed since the failure. Sources too large to prepare
+  (`overflow`) are not tried again until the process restarts.
+- **Where it runs.** From `acompletion`, it is a task on your event loop. If that loop ends first,
+  as when `asyncio.run(...)` returns, the preparation is cut off with nothing written and no event,
+  and it counts as a failure: the 10-minute wait applies before a routed request starts it again.
+  An app that runs a fresh event loop per request (`asyncio.run` per request, `async_to_sync`,
+  task workers) should make its calls on a long-lived loop, or use `completion`, so preparation
+  can finish. From `completion`, it runs on a daemon thread, which never keeps your process from
+  exiting. A short-lived script may therefore exit before the preparation finishes, and its next
+  run pays for it again. Events reach your handler from that task or thread.
+- **Closing.** `gate.close()` stops a running preparation before its next step: it sends nothing
+  more and starts no Profile write. `await gate.aclose()` does the same, then cancels the
+  preparation tasks on its event loop and waits for them. A store write already under way may
+  still complete, atomically and never partly written, and its `profile_ready` may then not be
+  sent. Otherwise the store is left as it was and no final event is sent. After either, nothing
+  starts again.
+- **Forking.** Create the instance after your process forks, for example inside each worker of a
+  pre-forking server, never before. Fork safety is not guaranteed in this version: a child forked
+  while a preparation runs can inherit its locks half-held.
 
 ## Notes
 

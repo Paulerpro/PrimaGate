@@ -367,7 +367,7 @@ def test_failed_events_are_warnings_and_the_rest_are_info() -> None:
     assert events.PreparationStarted.log_level == events.ProfileReady.log_level == logging.INFO
 
 
-def test_a_routed_call_never_prepares_or_writes_a_profile() -> None:
+def test_a_routed_call_only_asks_for_preparation_and_never_writes_a_profile() -> None:
     bindings = {
         Tier.SMALL: TierBinding(Tier.SMALL, "openai", "gpt-4o-mini"),
         Tier.MEDIUM: TierBinding(Tier.MEDIUM, "openai", "gpt-4o"),
@@ -395,10 +395,15 @@ def test_a_routed_call_never_prepares_or_writes_a_profile() -> None:
             outcome = _answer("hello")
         elif isinstance(action, steps.CountTokens):
             outcome = steps.CountOutcome(1, 1, True)
+        elif isinstance(action, steps.StartPreparation):
+            assert action.fingerprint == FP
+            outcome = steps.StartOutcome(True)
         else:
             raise AssertionError(type(action).__name__)
         action = advance(action, outcome)
     assert isinstance(action, steps.Return)
+    # Preparation is the driver's background work; the call itself only asks for it.
+    assert asked.count("StartPreparation") == 1
     assert "StoreWrite" not in asked and "PreparationDone" not in asked
 
 

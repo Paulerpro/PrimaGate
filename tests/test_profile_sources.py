@@ -300,8 +300,11 @@ def test_a_routed_call_still_uses_the_empty_profile_and_sends_no_source(call: Ca
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         text = request.content.decode()
-        sent.append(text)
         system = str(json.loads(text)["messages"][0].get("content", ""))
+        if f"Prompt version: {PREP_PROMPT_VERSION}" in system:
+            # The background preparation is the one request allowed to carry the sources.
+            return httpx2.Response(401, json={"error": {"message": "x", "type": "auth"}})
+        sent.append(text)
         if "Prompt version: analyzer" in system:
             analyzer_prompts.append(system)
             return _reply("MEDIUM 0.9")
@@ -314,6 +317,10 @@ def test_a_routed_call_still_uses_the_empty_profile_and_sends_no_source(call: Ca
     )
     pinned = gate._tier_routing
     call(gate, model=TIER_ROUTING_ALIAS, messages=[{"role": "user", "content": "where is it"}])
+    runner = gate._runner
+    assert runner is not None
+    for thread in list(runner._threads):
+        thread.join(10)
 
     assert gate._tier_routing is pinned
     (prompt,) = analyzer_prompts
