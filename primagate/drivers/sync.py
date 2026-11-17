@@ -271,6 +271,13 @@ class SyncDriver:
         raw = self._transport.send(provider_request)
         return settle(self._adapters, self._settings, action, raw)
 
+    def _analyze(self, action: steps.Analyze) -> Step:
+        # The Analyzer failing is an outcome for core to judge, never an error out of the driver.
+        try:
+            return self._dispatch(action.dispatch)
+        except PrimaGateError as err:
+            return steps.DispatchOutcome(error=err)
+
     def _random(self, action: steps.Random) -> Step:
         return steps.RandomOutcome(random.random())
 
@@ -304,6 +311,7 @@ class SyncDriver:
 
     HANDLERS: ClassVar[dict[type, Callable[[Any, Any], Step]]] = {
         steps.Dispatch: _dispatch,
+        steps.Analyze: _analyze,
         steps.Return: _return,
         steps.Raise: _raise,
         steps.Random: _random,

@@ -557,6 +557,7 @@ gate = PrimaGate(
         "SMALL": {"model": "gpt-4o-mini"},
         "MEDIUM": {"model": "gpt-4o"},
     },
+    analyzer="gpt-4o-mini",
     policy={
         "enabled_tiers": ["SMALL", "MEDIUM"],
         "confidence_threshold": 0.8,
@@ -571,6 +572,9 @@ response = gate.completion(
 )
 print(response.choices[0].message.content)
 ```
+
+`analyzer` is the model that chooses between Tiers (step 16). It is required when the Policy enables
+two or more Tiers and optional with one. It must be a concrete model, never the alias.
 
 The call above names a plain model, so the Policy is not involved in it yet.
 
@@ -632,28 +636,43 @@ Tier's `limits` can only take features away from what its provider offers, never
 - If no Tier can take the request, for example an image when none of them handles images, the call
   fails at once with an `UnsupportedParamsError` that names each Tier and what it lacks.
 - If exactly one Tier can, the call goes to that Tier's model.
-- If two or more can, PrimaGate cannot yet choose between them: the choice is the Analyzer's job,
-  and the Analyzer is not part of PrimaGate yet. The call fails with a `PrimaGateError` saying so,
-  and nothing is sent. So with several Tiers enabled, alias calls only work when the request's
-  needs leave one of them.
+- If two or more can, the Analyzer (step 17) chooses: it is asked once, with only the Tiers that
+  can take the request, and the call goes to the Tier it names. An answer below your
+  `confidence_threshold` takes your `ambiguous_context_default` instead. If that Tier cannot take
+  the request, the nearest Tier that can is used, stronger ones first.
+
+Every alias call is logged as a `routing_decision` event (step 13), and an answer below the
+threshold also as `low_confidence_downgrade`. A Tier above the cheapest one that could have taken
+the request also logs `premium_routing_selected`. The events carry ids and the `binding_id` (for
+example `MEDIUM:openai/gpt-4o`), never message content. Each call is decided on its own, so each
+step of a tool loop has its own decision. `profile_id` and `input_fingerprint` say `unknown` until
+Profiles exist. The response's `metadata.tier` names the Tier that answered and `metadata.analyzer`
+holds what the Analyzer cost, apart from `metadata.cost`.
+
+A repeated call that is answered from memory asks nobody: it has no `routing_decision`, and its
+`metadata.tier` and `metadata.analyzer` are empty. Every other alias call with two or more
+Tiers able to take it costs one extra, short request to the Analyzer's provider before the real
+one, and that request's tokens are in `metadata.analyzer`, not in `metadata.cost`. An Analyzer
+model with no known price reports `unknown_model` and no cost, as any model does (step 10).
+
+Two limits of this release. If the Analyzer fails, answers in the wrong shape or the latest turn
+is larger than `context_token_budget`, the call fails with a `PrimaGateError` and nothing is sent to
+a worker model; using the `interim_binding` for those cases is not available yet. A fallback list
+is not applied to alias calls either. The alias cannot be used in a fallback list.
 
 A repeat of an identical alias call is answered from memory (step 12) before any of this runs, as
-long as caching is on for that call; a stream never is. Two limits of this release: the response does
-not yet record which Tier answered (`attempt_chain` shows the model), and a fallback list
-is not applied to alias calls yet. The alias cannot be used in a fallback list.
+long as caching is on for that call, so a repeat never asks the Analyzer; a stream never is.
 
 ### 17. What the Analyzer reads
-
-The Analyzer is not wired into calls yet, so nothing described here is sent in this release. This
-is what it will read once it is.
 
 Tier Routing asks one model, the Analyzer, which Tier a request needs. That model is not your
 worker model, and you choose it. It runs in your process with your own keys, and PrimaGate sends
 it only this:
 
 - The Profile of your app: what your instructions, tool descriptions and skill descriptions say
-  about it, once they have been boiled down. Those sources are sent to the Analyzer's provider to
-  make the Profile.
+  about it, once they have been boiled down. Profiles are not prepared yet, so for now it only
+  says that all of that is unknown. When they are, the sources are sent to the Analyzer's provider
+  to make the Profile.
 - A bounded slice of the recent conversation: the latest turn in full, plus at most three earlier
   turns that fit your `context_token_budget` (step 15). That includes the tool calls the assistant
   made, with their arguments, and the tool results. System and developer messages and images are

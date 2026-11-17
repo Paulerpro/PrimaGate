@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from primagate.core.prices import BUNDLED, PriceTable
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.events import Event
+from primagate.schema.tiers import Tier
 from primagate.schema.types import (
+    AnalyzerUsage,
     Attempt,
     ChatCompletion,
     ChatCompletionRequest,
@@ -73,6 +75,9 @@ class Dispatch:
     no_cache: bool = False
     # Bundled prices with the caller's overrides on top; carried so the answer can be priced.
     prices: PriceTable = field(default_factory=lambda: BUNDLED)
+    # The Tier this dispatch serves under Tier Routing, and what choosing it cost; None otherwise.
+    tier: Tier | None = None
+    analyzer: AnalyzerUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -140,8 +145,30 @@ class CacheWrite:
     resume: Action
 
 
+@dataclass(frozen=True)
+class Analyze:
+    """Ask the driver to send the Analyzer's one dispatch; `resume` reads its outcome.
+
+    A separate action from `Dispatch` so the Analyzer's call can never be retried, fallen back
+    from or routed again.
+    """
+
+    dispatch: Dispatch
+    resume: Callable[[DispatchOutcome], Action]
+
+
 Action = (
-    Dispatch | Return | Raise | Random | Sleep | NewId | Emit | CountTokens | CacheRead | CacheWrite
+    Dispatch
+    | Return
+    | Raise
+    | Random
+    | Sleep
+    | NewId
+    | Emit
+    | CountTokens
+    | CacheRead
+    | CacheWrite
+    | Analyze
 )
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
@@ -156,6 +183,7 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     CountTokens,
     CacheRead,
     CacheWrite,
+    Analyze,
 )
 
 

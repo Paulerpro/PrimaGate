@@ -5,7 +5,7 @@ import pytest
 import primagate
 from primagate.core import fallbacks as core_fallbacks
 from primagate.core import tiers as core_tiers
-from primagate.core.call import first_action
+from primagate.core.call import Routing, first_action
 from primagate.core.policy import build_policy
 from primagate.core.steps import Dispatch, DropPolicy, Raise
 from primagate.drivers.providers import parse_tier_bindings
@@ -47,6 +47,12 @@ def _first(request: ChatCompletionRequest, routing: TierRouting | None, **kwargs
     return first_action(request, CAPS, tier_routing=routing, **kwargs)
 
 
+def _single(action: Any) -> Dispatch:
+    """The one dispatch a Routing holds when exactly one Tier can serve."""
+    assert isinstance(action, Routing) and len(action.candidates) == 1
+    return action.candidates[0][1]
+
+
 SMALL_CLAUDE = {"SMALL": {"model": "claude-sonnet-5-5"}}
 BOTH = {"SMALL": {"model": "claude-sonnet-5-5"}, "MEDIUM": {"model": "gpt-4o"}}
 
@@ -58,16 +64,15 @@ def test_the_alias_is_one_string_exported_and_reserved_against_fallbacks() -> No
 
 
 def test_one_enabled_tier_is_dispatched_to_its_bound_model() -> None:
-    action = _first(_request(), _routing({"MEDIUM": {"model": "gpt-4o"}}))
-    assert isinstance(action, Dispatch)
+    action = _single(_first(_request(), _routing({"MEDIUM": {"model": "gpt-4o"}})))
     assert (action.provider, action.request.model) == ("openai", "gpt-4o")
     assert action.plan is None
 
 
 def test_one_eligible_of_two_is_chosen_without_a_decision() -> None:
     request = _request(messages=[Message(role="user", content=IMAGE)])
-    action = _first(request, _routing(BOTH))
-    assert isinstance(action, Dispatch) and action.request.model == "gpt-4o"
+    action = _single(_first(request, _routing(BOTH)))
+    assert action.request.model == "gpt-4o"
 
 
 def test_a_plain_model_never_reaches_the_filter() -> None:
@@ -95,22 +100,27 @@ def test_binding_limits_remove_a_tier_its_adapter_would_allow() -> None:
 
 def test_drop_params_is_applied_before_the_filter_and_recorded() -> None:
     bound = {"SMALL": {"model": "gpt-4o-mini", "limits": {"supported_features": ["streaming"]}}}
-    action = _first(
-        _request(tools=[TOOL]), _routing(bound), policy=DropPolicy(features=frozenset({"tools"}))
+    action = _single(
+        _first(
+            _request(tools=[TOOL]),
+            _routing(bound),
+            policy=DropPolicy(features=frozenset({"tools"})),
+        )
     )
-    assert isinstance(action, Dispatch) and action.dropped_params == ("tools",)
+    assert action.dropped_params == ("tools",)
     assert action.request.tools is None
 
 
 def test_one_model_bound_to_two_tiers_is_one_candidate_and_the_lowest_keeps_it() -> None:
     twice = {"SMALL": {"model": "gpt-4o"}, "MEDIUM": {"model": "openai/gpt-4o"}}
-    action = _first(_request(), _routing(twice))
-    assert isinstance(action, Dispatch) and action.request.model == "gpt-4o"
+    routing = _first(_request(), _routing(twice))
+    action = _single(routing)
+    assert action.request.model == "gpt-4o" and routing.candidates[0][0] is Tier.SMALL
 
 
 def test_a_tier_that_is_not_enabled_is_not_a_candidate() -> None:
-    action = _first(_request(), _routing(BOTH, enabled=["MEDIUM"]))
-    assert isinstance(action, Dispatch) and action.request.model == "gpt-4o"
+    action = _single(_first(_request(), _routing(BOTH, enabled=["MEDIUM"])))
+    assert action.request.model == "gpt-4o"
 
 
 def test_a_repeated_model_is_dropped_after_the_filter_not_before() -> None:
@@ -119,17 +129,18 @@ def test_a_repeated_model_is_dropped_after_the_filter_not_before() -> None:
         "SMALL": {"model": "gpt-4o", "limits": {"supported_features": ["streaming"]}},
         "MEDIUM": {"model": "gpt-4o"},
     }
-    action = _first(_request(tools=[TOOL]), _routing(bound))
-    assert isinstance(action, Dispatch) and action.request.tools
+    action = _single(_first(_request(tools=[TOOL]), _routing(bound)))
+    assert action.request.tools
 
 
-def test_two_eligible_tiers_need_the_analyzer_and_dispatch_nothing() -> None:
+def test_two_eligible_tiers_are_both_offered_for_the_analyzer_to_choose_between() -> None:
     both_able = {"SMALL": {"model": "gpt-4o-mini"}, "MEDIUM": {"model": "gpt-4o"}}
-    action = _first(_request(), _routing(both_able))
-    assert isinstance(action, Raise)
-    assert type(action.error) is errors.PrimaGateError
-    assert "Analyzer" in str(action.error) and "not part of PrimaGate yet" in str(action.error)
-    assert action.error.attempt_chain == []
+    routing = _first(_request(), _routing(both_able))
+    assert isinstance(routing, Routing)
+    assert [(t, d.request.model) for t, d in routing.candidates] == [
+        (Tier.SMALL, "gpt-4o-mini"),
+        (Tier.MEDIUM, "gpt-4o"),
+    ]
 
 
 def test_a_fault_that_is_not_a_missing_feature_is_not_reported_as_one() -> None:

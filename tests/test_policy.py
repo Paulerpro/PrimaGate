@@ -30,7 +30,8 @@ FULL: dict[str, Any] = {
 
 
 def _gate(policy: Any = REQUIRED, bindings: Any = BINDINGS) -> PrimaGate:
-    return PrimaGate(tier_bindings=bindings, policy=policy)
+    analyzer = "gpt-4o-mini" if policy is not None else None
+    return PrimaGate(tier_bindings=bindings, policy=policy, analyzer=analyzer)
 
 
 def _policy(policy: Any = REQUIRED, bindings: Any = BINDINGS) -> Policy:

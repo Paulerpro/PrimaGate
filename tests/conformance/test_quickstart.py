@@ -313,7 +313,10 @@ def test_readme_explains_the_alias() -> None:
     for phrase in (
         "TIER_ROUTING_ALIAS",
         "primagate/auto",
-        "the Analyzer is not part of PrimaGate yet",
+        "the Analyzer (step 17) chooses",
+        "`metadata.tier`",
+        "`metadata.analyzer`",
+        "`premium_routing_selected`",
         "names each Tier and what it lacks",
         "cannot be used in a fallback list",
     ):

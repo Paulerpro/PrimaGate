@@ -139,6 +139,17 @@ class Cost(_Serializable):
     currency: str = "USD"
 
 
+@dataclass(frozen=True)
+class AnalyzerUsage(_Serializable):
+    """What one Analyzer call cost, kept apart from the worker model's cost."""
+
+    provider: str
+    model: str
+    token_counts: TokenCounts | None
+    cost: Cost | None
+    unknown_model: bool
+
+
 @dataclass
 class Metadata(_Serializable):
     """What the SDK did to a call beyond relaying it."""
@@ -151,6 +162,10 @@ class Metadata(_Serializable):
     unknown_model: bool = False
     # True when the answer came from the Cache and nothing was sent to a provider.
     cache_hit: bool = False
+    # The Tier that answered under Tier Routing; None for a plain call or a cached answer.
+    tier: str | None = None
+    # What the Analyzer spent choosing that Tier, apart from `cost`.
+    analyzer: AnalyzerUsage | None = None
 
 
 @dataclass

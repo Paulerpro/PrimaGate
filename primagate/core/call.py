@@ -5,13 +5,23 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+from primagate.core.analyzer import (
+    begin_analysis,
+    decision_events,
+    finish_analysis,
+    resolve_tier,
+)
 from primagate.core.cache import cache_key
 from primagate.core.classify import Fate, classify
+from primagate.core.context import OverBudget, bounded_context
 from primagate.core.counting import completion_text, prompt_text
 from primagate.core.fallbacks import fallback_candidates
-from primagate.core.prices import PriceTable, estimate
+from primagate.core.models import resolve_model
+from primagate.core.prices import BUNDLED, PriceTable, estimate
+from primagate.core.profile import PLACEHOLDER_UNKNOWNS
 from primagate.core.steps import (
     Action,
+    Analyze,
     CacheRead,
     CacheReadOutcome,
     CacheWrite,
@@ -37,6 +47,7 @@ from primagate.core.steps import (
 )
 from primagate.core.tiers import narrowed
 from primagate.schema import events
+from primagate.schema.analyzer import Analysis, AnalyzerFailure
 from primagate.schema.errors import (
     AttemptsExhaustedError,
     BadRequestError,
@@ -44,6 +55,8 @@ from primagate.schema.errors import (
     UnsupportedParamsError,
 )
 from primagate.schema.policy import TIER_ROUTING_ALIAS, TierRouting
+from primagate.schema.profile import ProfileContent
+from primagate.schema.tiers import Tier
 from primagate.schema.types import (
     Attempt,
     ChatCompletion,
@@ -62,9 +75,6 @@ from primagate.schema.wire import (
     Fallbacks,
     RetryPolicy,
 )
-
-DEFAULT_PROVIDER = "openai"
-KNOWN_PROVIDERS = frozenset({"openai", "anthropic"})
 
 # Behavior features a request can need, in the order errors list them, and the name a caller
 # uses to opt in to dropping each.
@@ -92,20 +102,6 @@ def parse_drop_params(value: Any) -> DropPolicy:
         return DropPolicy(features=frozenset(value))
     allowed = ", ".join(f'"{n}"' for n in sorted(DROPPABLE_FEATURES))
     raise BadRequestError(f"drop_params must be True, False, None or a list drawn from {allowed}")
-
-
-def resolve_model(name: str) -> tuple[str, str]:
-    """Split a model string into (provider, model).
-
-    A bare `claude-*` name is Anthropic's; any other bare name is the default provider's, so
-    OpenAI-compatible servers with unusual model names keep working.
-    """
-    prefix, sep, rest = name.partition("/")
-    if not sep:
-        return ("anthropic" if name.startswith("claude-") else DEFAULT_PROVIDER), name
-    if prefix in KNOWN_PROVIDERS:
-        return prefix, rest
-    raise BadRequestError(f"Unknown provider prefix '{prefix}' in model '{name}'")
 
 
 def required_features(request: ChatCompletionRequest) -> list[str]:
@@ -196,6 +192,14 @@ def _build(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class Routing:
+    """The Tiers that can take a request, each with the dispatch that would serve it."""
+
+    candidates: tuple[tuple[Tier, Dispatch], ...]
+    tiers: TierRouting
+
+
 def _route_tier(
     request: ChatCompletionRequest,
     capabilities: Mapping[str, Capabilities],
@@ -203,8 +207,8 @@ def _route_tier(
     routes: Mapping[tuple[str, str], tuple[Endpoint, ...]],
     retry: RetryPolicy,
     tiers: TierRouting | None,
-) -> Dispatch:
-    """The Compatibility Filter for Tier Routing, and the dispatch when only one Tier can serve.
+) -> Routing:
+    """The Compatibility Filter for Tier Routing: every Tier that can serve the request.
 
     Each enabled Tier goes through `_build`, the check the plain path and the Fallback List use
     too, with the adapter's capabilities narrowed by that Tier's binding, so all three agree on
@@ -215,7 +219,7 @@ def _route_tier(
             f"model '{TIER_ROUTING_ALIAS}' is the Tier Routing alias; "
             "declare tier_bindings and a policy before using it"
         )
-    able: list[Dispatch] = []
+    able: list[tuple[Tier, Dispatch]] = []
     lacking: list[str] = []
     for tier in tiers.policy.enabled_tiers:
         binding = tiers.bindings[tier]
@@ -230,25 +234,20 @@ def _route_tier(
             }
         )
         try:
-            able.append(_build(request, provider, model, seen_by_tier, drops, routes, retry))
+            built = _build(request, provider, model, seen_by_tier, drops, routes, retry)
+            able.append((tier, built))
         except UnsupportedParamsError as reason:
             # Only a missing feature means "this Tier cannot take it"; anything else is a fault
             # to report as it is, not to hide behind a feature message.
             lacking.append(f"{tier.name} ({provider}/{model}): {reason.message}")
     # After the filter, so a model removed by one Tier's limits can still serve under another's.
-    first_per_model: dict[tuple[str, str], Dispatch] = {}
-    for built in able:
-        first_per_model.setdefault((built.provider, built.request.model), built)
-    unique = list(first_per_model.values())
+    first_per_model: dict[tuple[str, str], tuple[Tier, Dispatch]] = {}
+    for tier, built in able:
+        first_per_model.setdefault((built.provider, built.request.model), (tier, built))
+    unique = tuple(first_per_model.values())
     if not unique:
         raise UnsupportedParamsError("No enabled Tier can take this request. " + "; ".join(lacking))
-    if len(unique) > 1:
-        names = ", ".join(f"{d.provider}/{d.request.model}" for d in unique)
-        raise PrimaGateError(
-            f"{len(unique)} Tiers can take this request ({names}); choosing between them needs "
-            "the Analyzer, which is not part of PrimaGate yet"
-        )
-    return unique[0]
+    return Routing(unique, tiers)
 
 
 def first_action(
@@ -259,7 +258,7 @@ def first_action(
     retry: RetryPolicy = DEFAULT_RETRY,
     fallbacks: Fallbacks = NO_FALLBACKS,
     tier_routing: TierRouting | None = None,
-) -> Action:
+) -> Action | Routing:
     routes = routing or {}
     try:
         if request.model == TIER_ROUTING_ALIAS:
@@ -398,6 +397,8 @@ def next_action(action: Action, outcome: Outcome) -> Action:
             token_counts=priced.token_counts,
             cost=priced.cost,
             unknown_model=priced.unknown_model,
+            tier=action.tier.name if action.tier else None,
+            analyzer=action.analyzer,
         )
         return Return(dataclasses.replace(outcome.response, metadata=metadata))
     if isinstance(action, Random) and isinstance(outcome, RandomOutcome):
@@ -433,32 +434,107 @@ def start(
     # A stream never touches the Cache, and a call may opt out of it.
     cacheable = use_cache and not request.stream
 
+    def ready(first: Dispatch, request_id: str, key: str | None, read_already: bool) -> Action:
+        """Make a chosen dispatch the call's own: id, price table, then the Cache, then send."""
+        first = dataclasses.replace(
+            first, request_id=request_id, payload_retention=payload_retention
+        )
+        if prices is not None:
+            first = dataclasses.replace(first, prices=prices)
+        if not cacheable:
+            return Emit((_started(first),), first)
+        if not read_already:
+            # Read only once the request is known to be valid, so an invalid one still raises.
+            key = cache_key(request, policy, cache_salt)
+        if key is None:
+            return Emit((_started(first),), first)
+        first = dataclasses.replace(first, cache_key=key)
+        if read_already:
+            return Emit((_started(first),), first)
+        return CacheRead(key, lambda read: _after_read(first, read))
+
+    def failed(request_id: str, error: PrimaGateError) -> Action:
+        return Emit((_call_failed(request_id, error),), Raise(error))
+
+    def decided(
+        routing: Routing,
+        tier: Tier,
+        request_id: str,
+        analysis: Analysis | None,
+        key: str | None,
+        read_already: bool,
+    ) -> Action:
+        eligible = [t for t, _ in routing.candidates]
+        chosen = dict(routing.candidates)[tier]
+        binding = routing.tiers.bindings[tier]
+        usage = analysis.usage if analysis else None
+        chosen = dataclasses.replace(chosen, tier=tier, analyzer=usage)
+        announced = decision_events(
+            request_id,
+            tier,
+            f"{tier.name}:{binding.provider}/{binding.model_id}",
+            eligible,
+            analysis,
+        )
+        return Emit(announced, ready(chosen, request_id, key, read_already))
+
+    def analyzing(routing: Routing, request_id: str, key: str | None, read_already: bool) -> Action:
+        """Two or more Tiers can serve the request, so the Analyzer chooses between them."""
+        tiers = routing.tiers
+        eligible = tuple(t for t, _ in routing.candidates)
+        # Only Tiers that can take the request are offered, so the answer is always usable.
+        narrowed_policy = dataclasses.replace(tiers.policy, enabled_tiers=eligible)
+        if tiers.analyzer is None:
+            return failed(request_id, PrimaGateError("Tier Routing has no analyzer declared"))
+        view = bounded_context(request, tiers.policy.context_token_budget)
+        if isinstance(view, OverBudget):
+            return failed(
+                request_id,
+                PrimaGateError(
+                    "the latest exchange is larger than context_token_budget; using the Interim "
+                    "Binding for that is not part of PrimaGate yet"
+                ),
+            )
+        content = ProfileContent(unknowns=PLACEHOLDER_UNKNOWNS)
+        try:
+            begun = begin_analysis(
+                tiers.analyzer,
+                content,
+                view,
+                narrowed_policy,
+                capabilities,
+                BUNDLED if prices is None else prices,
+            )
+        except PrimaGateError as err:
+            return failed(request_id, err)
+        if isinstance(begun, Analysis):
+            return failed(request_id, _analysis_failure(begun))
+
+        def after(outcome: DispatchOutcome) -> Action:
+            analysis = finish_analysis(begun, outcome, narrowed_policy)
+            if isinstance(analysis.outcome, AnalyzerFailure):
+                return failed(request_id, _analysis_failure(analysis))
+            chosen = resolve_tier(analysis.outcome.tier, eligible)
+            return decided(routing, chosen, request_id, analysis, key, read_already)
+
+        return Analyze(begun, after)
+
     def begin(request_id: str, key: str | None = None, read_already: bool = False) -> Action:
         first = first_action(request, capabilities, policy, routing, retry, fallbacks, tier_routing)
+        if isinstance(first, Routing):
+            if len(first.candidates) == 1:
+                tier = first.candidates[0][0]
+                return decided(first, tier, request_id, None, key, read_already)
+            return analyzing(first, request_id, key, read_already)
         if isinstance(first, Dispatch):
-            first = dataclasses.replace(
-                first, request_id=request_id, payload_retention=payload_retention
-            )
-            if prices is not None:
-                first = dataclasses.replace(first, prices=prices)
-            if not cacheable:
-                return Emit((_started(first),), first)
-            if not read_already:
-                # Read only once the request is known to be valid, so an invalid one still raises.
-                key = cache_key(request, policy, cache_salt)
-            if key is None:
-                return Emit((_started(first),), first)
-            first = dataclasses.replace(first, cache_key=key)
-            if read_already:
-                return Emit((_started(first),), first)
-            return CacheRead(key, lambda read: _after_read(first, read))
+            return ready(first, request_id, key, read_already)
         if isinstance(first, Raise):
-            return Emit((_call_failed(request_id, first.error),), first)
+            return failed(request_id, first.error)
         return first
 
     def begin_routed(request_id: str) -> Action:
-        # A hit returns before the Tier is chosen, so it never depends on the filter or, later, on
-        # an Analyzer. Anything a past answer was cached for would pass the filter again.
+        # A hit returns before the Tier is chosen, so it never depends on the filter or on the
+        # Analyzer. Anything a past answer was cached for would pass the filter again.
         key = cache_key(request, policy, cache_salt)
         if key is None:
             return begin(request_id)
@@ -475,6 +551,14 @@ def start(
     return NewId(begin_routed if routed else begin)
 
 
+def _analysis_failure(analysis: Analysis) -> PrimaGateError:
+    reason = analysis.outcome.reason
+    return PrimaGateError(
+        f"the Tier Routing Analyzer gave no usable answer ({reason}); using the Interim Binding "
+        "for that is not part of PrimaGate yet"
+    )
+
+
 def advance(action: Action, outcome: Outcome) -> Action:
     """Like `next_action`, and also says what happened so the driver can deliver the events."""
     if isinstance(action, NewId) and isinstance(outcome, IdOutcome):
@@ -487,6 +571,8 @@ def advance(action: Action, outcome: Outcome) -> Action:
         return action.resume(outcome)
     if isinstance(action, CacheWrite) and isinstance(outcome, CacheWriteOutcome):
         return action.resume
+    if isinstance(action, Analyze) and isinstance(outcome, DispatchOutcome):
+        return action.resume(outcome)
     following = next_action(action, outcome)
     if (
         isinstance(action, Dispatch)

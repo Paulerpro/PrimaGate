@@ -36,3 +36,5 @@ class TierRouting:
 
     policy: Policy
     bindings: Mapping[Tier, TierBinding]
+    # The model that judges which Tier a request needs; None when only one Tier is enabled.
+    analyzer: str | None = None

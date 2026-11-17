@@ -13,11 +13,12 @@ from primagate.adapters import anthropic, openai
 from primagate.core import fallbacks as core_fallbacks
 from primagate.core import policy as core_policy
 from primagate.core import tiers as core_tiers
-from primagate.core.call import parse_drop_params, resolve_model
+from primagate.core.call import parse_drop_params
+from primagate.core.models import resolve_model
 from primagate.core.ports import Adapter
 from primagate.core.prices import Price
 from primagate.schema.errors import AuthenticationError, BadRequestError
-from primagate.schema.policy import Policy
+from primagate.schema.policy import TIER_ROUTING_ALIAS, Policy
 from primagate.schema.tiers import (
     FEATURES,
     UNKNOWN,
@@ -254,6 +255,31 @@ _BINDING_FIELDS = frozenset({"model", "settings", "limits", "pricing"})
 _SETTING_FIELDS = frozenset({"temperature", "top_p", "max_tokens", "seed", "stop"})
 _LIMIT_FIELDS = frozenset({"context_window", "max_output_tokens", "supported_features"})
 _UNKNOWN_WORD = "unknown"
+
+
+def parse_analyzer(value: object, policy: Policy | None) -> str | None:
+    """The model that chooses between Tiers, checked at setup so a bad one fails early."""
+    enabled = len(policy.enabled_tiers) if policy is not None else 0
+    if value is None:
+        if enabled >= 2:
+            raise BadRequestError(
+                "policy enables two or more Tiers, so setup needs analyzer: the model that "
+                "chooses between them"
+            )
+        return None
+    if policy is None:
+        raise BadRequestError("analyzer needs tier_bindings and a policy to route for")
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequestError("analyzer must be a model name")
+    # Padding would be sent to the provider as part of the model name.
+    value = value.strip()
+    if value == TIER_ROUTING_ALIAS:
+        # The Analyzer's own call would be routed by the Analyzer.
+        raise BadRequestError("analyzer must be a concrete model, not the Tier Routing alias")
+    _, model = resolve_model(value)
+    if not model.strip():
+        raise BadRequestError(f"analyzer names '{value}' without a model")
+    return value
 
 
 def parse_tier_bindings(value: object) -> dict[Tier, TierBinding]:

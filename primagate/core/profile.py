@@ -27,7 +27,7 @@ _PROFILE_FIELDS = (
 )
 _CONTENT_TEXT = ("purpose",)
 _CONTENT_LISTS = ("interactions", "constraints", "capabilities", "unknowns")
-_PLACEHOLDER_UNKNOWNS = ("purpose", "interactions", "constraints", "capabilities")
+PLACEHOLDER_UNKNOWNS = ("purpose", "interactions", "constraints", "capabilities")
 
 
 def input_fingerprint(
@@ -107,7 +107,7 @@ def empty_profile(
         input_fingerprint=fingerprint,
         schema_version=PROFILE_SCHEMA_VERSION,
         created_at=created_at,
-        content=ProfileContent(unknowns=_PLACEHOLDER_UNKNOWNS),
+        content=ProfileContent(unknowns=PLACEHOLDER_UNKNOWNS),
         source_ref=source_ref,
     )
 

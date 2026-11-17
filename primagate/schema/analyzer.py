@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from primagate.schema.tiers import Tier
-from primagate.schema.types import Cost, TokenCounts
+from primagate.schema.types import AnalyzerUsage
 
 # Fixed names, so a failure can be counted and logged without ever holding what the model said.
 FailureReason = Literal["no_conversation", "provider_error", "malformed_output", "tier_not_enabled"]
@@ -30,18 +30,17 @@ class AnalyzerFailure:
 
 
 @dataclass(frozen=True)
-class AnalyzerUsage:
-    """What one Analyzer call cost, kept apart from the worker model's cost."""
-
-    provider: str
-    model: str
-    token_counts: TokenCounts | None
-    cost: Cost | None
-    unknown_model: bool
-
-
-@dataclass(frozen=True)
 class Analysis:
     outcome: Verdict | AnalyzerFailure
     # None when nothing was answered, so nothing was spent.
     usage: AnalyzerUsage | None
+
+
+__all__ = [
+    "Analysis",
+    "AnalyzerFailure",
+    "AnalyzerUsage",
+    "FailureReason",
+    "Verdict",
+    "VerdictReason",
+]

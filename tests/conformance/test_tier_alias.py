@@ -23,6 +23,7 @@ IMAGE_MSGS = [
 def _setup(bindings: dict[str, Any], enabled: list[str] | None = None) -> dict[str, Any]:
     names = enabled or list(bindings)
     return {
+        "analyzer": "gpt-4o-mini",
         "tier_bindings": bindings,
         "policy": {
             "enabled_tiers": names,
@@ -95,14 +96,17 @@ def test_a_caller_who_opts_in_to_dropping_images_gets_the_tier_and_a_record(
     assert result.metadata is not None and result.metadata.dropped_params == ["image"]
 
 
-def test_two_able_tiers_wait_for_the_analyzer_and_nothing_is_sent(call: Caller) -> None:
+def test_two_able_tiers_with_an_unusable_analyzer_answer_fail_before_the_worker(
+    call: Caller,
+) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler, **TWO)
     with pytest.raises(errors.PrimaGateError) as caught:
         call(run.gate, model=ALIAS, messages=MSGS)
     assert type(caught.value) is errors.PrimaGateError
-    assert "Analyzer" in str(caught.value) and run.sent == []
-    assert handler.types == ["call_failed"]
+    assert "no usable answer" in str(caught.value)
+    # Only the Analyzer was asked; its answer was not a Tier, so no worker was called.
+    assert len(run.sent) == 1 and handler.types == ["call_failed"]
 
 
 def test_the_alias_without_a_policy_is_refused_before_any_dispatch(call: Caller) -> None:
@@ -143,9 +147,10 @@ def test_a_cache_hit_returns_before_routing_even_where_routing_could_not_choose(
     second.gate._cache = first.gate._cache
     with pytest.raises(errors.PrimaGateError):
         call(second.gate, model=ALIAS, messages=MSGS, cache=False)
+    asked = len(second.sent)
     again = call(second.gate, model=ALIAS, messages=MSGS)
     assert again.metadata is not None and again.metadata.cache_hit
-    assert second.sent == []
+    assert len(second.sent) == asked
 
 
 def test_a_failed_filter_is_never_cached(call: Caller) -> None:
@@ -153,7 +158,8 @@ def test_a_failed_filter_is_never_cached(call: Caller) -> None:
     for _ in range(2):
         with pytest.raises(errors.PrimaGateError, match="Analyzer"):
             call(run.gate, model=ALIAS, messages=MSGS)
-    assert run.sent == []
+    # Both calls asked the Analyzer: a failed routing is never replayed from the Cache.
+    assert len(run.sent) == 2
 
 
 def test_a_plain_call_with_a_fallback_list_is_unaffected_by_tier_setup(call: Caller) -> None:

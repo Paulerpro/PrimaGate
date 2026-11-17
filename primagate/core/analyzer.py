@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from primagate.core import steps
-from primagate.core.call import resolve_model
 from primagate.core.context import RoutingContext
 from primagate.core.counting import messages_text
+from primagate.core.models import resolve_model
 from primagate.core.prices import PriceTable, estimate
+from primagate.schema import events
 from primagate.schema.analyzer import Analysis, AnalyzerFailure, AnalyzerUsage, Verdict
 from primagate.schema.errors import BadRequestError, PrimaGateError
 from primagate.schema.policy import TIER_ROUTING_ALIAS, Policy
@@ -124,3 +125,44 @@ def _instructions(profile: ProfileContent, policy: Policy) -> str:
 
 def _list(title: str, items: tuple[str, ...]) -> str:
     return f"{title}:\n" + "\n".join(f"- {i}" for i in items) if items else ""
+
+
+def resolve_tier(chosen: Tier, eligible: Sequence[Tier]) -> Tier:
+    """`chosen` if it can take the request, else the nearest Tier that can.
+
+    Upward first, since a stronger model is safe where a weaker one may not be. This matters
+    when the default Tier for a vague answer was filtered out for lacking a feature.
+    """
+    if chosen in eligible:
+        return chosen
+    above = sorted(t for t in eligible if t > chosen)
+    return above[0] if above else max(eligible)
+
+
+def decision_events(
+    request_id: str,
+    tier: Tier,
+    binding_id: str,
+    eligible: Sequence[Tier],
+    analysis: Analysis | None,
+) -> tuple[events.Event, ...]:
+    """The events that explain one routing decision, with ids only and never message content.
+
+    No Profile is READY until preparation exists, so its fields say "unknown", as do the prompt
+    versions of steps that did not run.
+    """
+    unknown = "unknown"
+    fields = {
+        "profile_id": unknown,
+        "input_fingerprint": unknown,
+        "prep_prompt_version": unknown,
+        "analyzer_prompt_version": ANALYZER_PROMPT_VERSION if analysis else unknown,
+        "binding_id": binding_id,
+    }
+    made: list[events.Event] = [events.RoutingDecision(request_id, **fields)]
+    outcome = analysis.outcome if analysis else None
+    if isinstance(outcome, Verdict) and outcome.low_confidence_downgrade:
+        made.append(events.LowConfidenceDowngrade(request_id, **fields))
+    if tier > min(eligible):
+        made.append(events.PremiumRoutingSelected(request_id, **fields))
+    return tuple(made)

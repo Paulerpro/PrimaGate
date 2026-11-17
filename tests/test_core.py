@@ -55,6 +55,7 @@ def test_closed_action_set_is_dispatch_return_raise_random_sleep_id_emit() -> No
         "CountTokens",
         "CacheRead",
         "CacheWrite",
+        "Analyze",
     }
 
 
@@ -69,7 +70,7 @@ def test_resolve_model_routes_claude_to_anthropic(name: str) -> None:
 
 
 def test_routing_and_driver_provider_tables_agree() -> None:
-    from primagate.core.call import KNOWN_PROVIDERS
+    from primagate.core.models import KNOWN_PROVIDERS
     from primagate.drivers.providers import BUILTIN_PROVIDERS
 
     assert KNOWN_PROVIDERS == set(BUILTIN_PROVIDERS)
