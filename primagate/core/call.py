@@ -28,6 +28,7 @@ from primagate.core.steps import (
     CacheWriteOutcome,
     CountOutcome,
     CountTokens,
+    Declined,
     Dispatch,
     DispatchOutcome,
     DropPolicy,
@@ -536,7 +537,9 @@ def start(
         if isinstance(begun, Analysis):
             return give_up(begun.outcome.reason)
 
-        def after(outcome: DispatchOutcome) -> Action:
+        def after(outcome: DispatchOutcome | Declined) -> Action:
+            if isinstance(outcome, Declined):
+                return give_up(outcome.reason)
             analysis = finish_analysis(begun, outcome, narrowed_policy)
             if isinstance(analysis.outcome, AnalyzerFailure):
                 return give_up(analysis.outcome.reason, analysis, asked=True)
@@ -589,7 +592,7 @@ def advance(action: Action, outcome: Outcome) -> Action:
         return action.resume(outcome)
     if isinstance(action, CacheWrite) and isinstance(outcome, CacheWriteOutcome):
         return action.resume
-    if isinstance(action, Analyze) and isinstance(outcome, DispatchOutcome):
+    if isinstance(action, Analyze) and isinstance(outcome, DispatchOutcome | Declined):
         return action.resume(outcome)
     following = next_action(action, outcome)
     if (

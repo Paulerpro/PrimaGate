@@ -14,6 +14,7 @@ from typing_extensions import Unpack
 from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.cache import DEFAULT_MAX_ENTRIES, ResponseCache
+from primagate.drivers.capacity import DEFAULT_MAX_CONCURRENT_ANALYZER_CALLS, AnalyzerCap
 from primagate.drivers.providers import (
     check_drop_params,
     check_provider_names,
@@ -138,6 +139,14 @@ class PrimaGate:
             raise BadRequestError("token_counter must be a plain function taking (model, text)")
         # One for both drivers, so a broken tiktoken is tried and reported once per instance.
         self._counting = TokenCounting(token_counter)
+        # One for both drivers, so the limit counts a sync call and an async call together.
+        self._analyzer_cap = (
+            AnalyzerCap(
+                self._policy.max_concurrent_analyzer_calls or DEFAULT_MAX_CONCURRENT_ANALYZER_CALLS
+            )
+            if self._policy is not None
+            else None
+        )
         # One for both drivers, so a sync call and an async call can answer each other.
         self._cache = ResponseCache(_cache_size(cache_max_entries), secrets.token_bytes(16))
         self._event_handler = event_handler
@@ -236,6 +245,7 @@ class PrimaGate:
                     counting=self._counting,
                     cache=self._cache,
                     tier_routing=self._tier_routing,
+                    analyzer_cap=self._analyzer_cap,
                 )
             return self._driver
 
@@ -257,6 +267,7 @@ class PrimaGate:
                     counting=self._counting,
                     cache=self._cache,
                     tier_routing=self._tier_routing,
+                    analyzer_cap=self._analyzer_cap,
                 )
             return self._async_driver
 

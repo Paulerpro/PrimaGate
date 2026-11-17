@@ -87,7 +87,7 @@ def build_policy(
     if preference != "balanced":
         advisories = (
             f"policy cost_preference is {preference}, not the default balanced; it is accepted "
-            "but has no effect yet, because Tier Routing is not part of PrimaGate yet",
+            "but has no effect yet: it is advice for later, and routing does not use it",
         )
     return Policy(version=_version(fields), **fields), advisories
 

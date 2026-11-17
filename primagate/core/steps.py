@@ -154,7 +154,7 @@ class Analyze:
     """
 
     dispatch: Dispatch
-    resume: Callable[[DispatchOutcome], Action]
+    resume: Callable[[DispatchOutcome | Declined], Action]
 
 
 Action = (
@@ -194,6 +194,13 @@ class DispatchOutcome:
     response: ChatCompletion | None = None
     error: PrimaGateError | None = None
     dropped_params: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Declined:
+    """The driver did not send what it was asked to, and says why; core decides what follows."""
+
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -237,6 +244,7 @@ class CacheWriteOutcome:
 
 Outcome = (
     DispatchOutcome
+    | Declined
     | RandomOutcome
     | SleepOutcome
     | IdOutcome

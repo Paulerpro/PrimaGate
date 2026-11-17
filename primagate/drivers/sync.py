@@ -27,6 +27,7 @@ from primagate.drivers._shared import (
     settle,
 )
 from primagate.drivers.cache import ResponseCache
+from primagate.drivers.capacity import AnalyzerCap
 from primagate.drivers.providers import (
     ProviderRouting,
     SettingsResolver,
@@ -132,6 +133,7 @@ class SyncDriver:
         counting: TokenCounting | None = None,
         cache: ResponseCache | None = None,
         tier_routing: TierRouting | None = None,
+        analyzer_cap: AnalyzerCap | None = None,
     ) -> None:
         self._adapters = adapters
         self._settings = settings
@@ -145,6 +147,7 @@ class SyncDriver:
         self._counting = counting or TokenCounting()
         self._cache = cache or ResponseCache()
         self._tier_routing = tier_routing
+        self._analyzer_cap = analyzer_cap
         self._capabilities = {name: a.capabilities() for name, a in adapters.items()}
 
     @classmethod
@@ -164,6 +167,7 @@ class SyncDriver:
         counting: TokenCounting | None = None,
         cache: ResponseCache | None = None,
         tier_routing: TierRouting | None = None,
+        analyzer_cap: AnalyzerCap | None = None,
     ) -> SyncDriver:
         return cls(
             adapters=builtin_adapters(),
@@ -178,6 +182,7 @@ class SyncDriver:
             counting=counting,
             cache=cache,
             tier_routing=tier_routing,
+            analyzer_cap=analyzer_cap,
         )
 
     def close(self) -> None:
@@ -272,11 +277,19 @@ class SyncDriver:
         return settle(self._adapters, self._settings, action, raw)
 
     def _analyze(self, action: steps.Analyze) -> Step:
-        # The Analyzer failing is an outcome for core to judge, never an error out of the driver.
+        cap = self._analyzer_cap
+        # Over the limit means no request and no waiting: core sends the call to the Interim
+        # Binding instead, so a slow Analyzer cannot hold callers up.
+        if cap is not None and not cap.try_acquire():
+            return steps.Declined("over_capacity")
         try:
+            # The Analyzer failing is an outcome for core to judge, never an error out of here.
             return self._dispatch(action.dispatch)
         except PrimaGateError as err:
             return steps.DispatchOutcome(error=err)
+        finally:
+            if cap is not None:
+                cap.release()
 
     def _random(self, action: steps.Random) -> Step:
         return steps.RandomOutcome(random.random())

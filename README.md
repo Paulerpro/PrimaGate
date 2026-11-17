@@ -593,11 +593,15 @@ Optional:
 
 - `cost_preference`: `balanced` (the default), `cost_conscious` or `capability_first`. Either of the
   last two is accepted, with one warning in the `primagate` log each time a `PrimaGate` is created.
-  It has no effect yet, because nothing routes.
+  It has no effect yet: it is advice for later, and routing does not use it.
 - `ambiguous_context_default`: the Tier used when the Analyzer is not confident enough. `MEDIUM` when
   you leave it out, so a Policy that does not enable `MEDIUM` must set it.
-- `max_concurrent_analyzer_calls`: a cap on routing decisions in flight at once. Left out, no cap is
-  set yet; its default will be chosen when the cap is built.
+- `max_concurrent_analyzer_calls`: a cap on Analyzer requests in flight at once, counted for each
+  `PrimaGate` instance (its sync and async calls together). Left out, the limit is 8, a provisional
+  number that will be tuned. Past the limit a call does not wait: it goes to your `interim_binding`
+  at once (step 16). The count is not shared between instances or processes, and only calls that
+  really ask the Analyzer take a place in it: a repeat answered from memory, or a request only one
+  Tier can take, does not.
 - `spending_ceiling`: US dollars. A warning, never a limit.
 
 `interim_binding` and `ambiguous_context_default` must name enabled Tiers. A Policy is fixed once
@@ -657,16 +661,19 @@ one, and that request's tokens are in `metadata.analyzer`, not in `metadata.cost
 model with no known price reports `unknown_model` and no cost, as any model does (step 10).
 
 When routing cannot choose, your request is not failed. If the Analyzer is unreachable or times
-out, answers in the wrong shape, names a Tier that cannot take the request, or the latest turn is
-larger than `context_token_budget`, the call goes to your `interim_binding` Tier instead. That is
-one dispatch to a worker model, with no second Analyzer request (retries and provider routing for
-that model still apply as for any call), and a `routing_degraded` event (step 13) says why with
-one of these reasons: `provider_error`, `malformed_output`, `tier_not_enabled`, `no_conversation`
-or `over_budget`. If the `interim_binding` Tier cannot take the request, the nearest Tier that can
-is used, stronger ones first. Because the Interim Tier may sit above the cheapest able one,
-`premium_routing_selected` can follow `routing_degraded` for the same call. An answer given this
-way is never stored in the cache (step 12), so the next identical call asks the Analyzer again. A
-fallback list is not applied to alias calls yet, and the alias cannot be used in a fallback list.
+out, answers in the wrong shape, names a Tier that cannot take the request, the latest turn is
+larger than `context_token_budget`, or the Analyzer cap is reached, the call goes to your
+`interim_binding` Tier instead. That is one dispatch to a worker model, with no second Analyzer
+request (retries and provider routing for that model still apply as for any call), and a
+`routing_degraded` event (step 13) says why with one of these reasons: `provider_error`,
+`malformed_output`, `tier_not_enabled`, `no_conversation`, `over_budget` or `over_capacity` (the cap
+in step 15 was reached). If the `interim_binding` Tier cannot take the request, the nearest Tier
+that can is used, stronger ones first. Because the Interim Tier may sit above the cheapest able
+one, `premium_routing_selected` can follow `routing_degraded` for the same call. An answer given
+this way is never stored in the cache (step 12), so the next identical call asks the Analyzer
+again.
+
+A fallback list is not applied to alias calls yet. The alias cannot be used in a fallback list.
 
 ### 17. What the Analyzer reads
 
