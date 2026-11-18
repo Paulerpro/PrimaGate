@@ -165,6 +165,10 @@ class StreamState:
                         token_counts=priced.token_counts,
                         cost=priced.cost,
                         unknown_model=priced.unknown_model,
+                        # As a non-streamed answer reports them: the Tier that answered (none
+                        # for a fallback), and the Analyzer usage whichever model answered.
+                        tier=self._action.tier.name if self._action.tier else None,
+                        analyzer=self._action.analyzer,
                     )
             self._queue.extend(chunks)
         except PrimaGateError as err:

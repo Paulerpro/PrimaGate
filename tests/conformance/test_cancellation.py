@@ -432,6 +432,10 @@ class Clock:
 
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    return stand_in_clock(monkeypatch)
+
+
+def stand_in_clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
     """The deadline's clock, moved only by retry waits or by the test itself. Only the driver's
     view of the clock is replaced, so the event loop keeps its own."""
     stand_in = Clock()

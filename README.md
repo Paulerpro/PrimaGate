@@ -666,15 +666,18 @@ Optional:
   really ask the Analyzer take a place in it: a repeat answered from memory, or a request only one
   Tier can take, does not.
 - `spending_ceiling`: US dollars. A warning, never a limit. Once the estimated cost of the calls
-  made with the alias, each one's answer plus its Analyzer request, passes it (the answer is
-  counted whichever model gave it: the chosen Tier, MEDIUM after Tier Failover, or a fallback), one
+  made with the alias, each one's answer plus its Analyzer request, passes it (a non-streamed
+  answer is counted whichever model gave it: the chosen Tier, MEDIUM after Tier Failover, or a
+  fallback), one
   `spending_ceiling_exceeded` event is sent with the ceiling and the total, and it is also
   written to the `primagate` log as a warning. It is sent once, and nothing about any call
   changes: later calls are routed and answered exactly as before. The total is kept in memory
   for each `PrimaGate` instance, so a restart starts again from zero. Plain model calls, calls
   answered from memory, streams, models with no known price (step 10) and calls that end in an
   error are not counted, nor are the failed attempts before a retry succeeds, so the total can
-  run a little below what you were billed.
+  run a little below what you were billed. The one exception for streams: a routed stream that is
+  cancelled still counts the Analyzer request it already paid for (step 19), although a routed
+  stream that finishes is not counted at all.
 
 `interim_binding` and `ambiguous_context_default` must name enabled Tiers. A Policy is fixed once
 set up, so one request can never see its rules change halfway. Today a Policy only checks your setup:
@@ -825,6 +828,22 @@ is cached like any routed answer, unless the call had gone to the Interim Bindin
 under the call's own key, so an identical routed call gets the fallback's answer back from memory
 (step 12) even after the chosen Tier has recovered. The alias cannot be used in a fallback list.
 
+A routed stream (`stream=True`) follows the same chain. A failure before the first chunk reaches
+you is retried and moves on to MEDIUM and then your fallback models exactly as above, and the
+stream you get back opens on whichever model sends the first chunk. If every step fails before
+a first chunk, the call itself raises, just as a non-streamed call does (`AttemptsExhaustedError`
+once more than one row is in the chain). Once a chunk has reached you, nothing is retried or moved
+on: the error is raised while you iterate, as the provider's own mapped error (such as
+`APIConnectionError`), never `AttemptsExhaustedError`, so `except AttemptsExhaustedError` does not
+catch it. Its `attempt_chain` still holds every earlier attempt and `skipped` row plus the one that
+was streaming. The last chunk's `metadata` carries `tier` and `analyzer` as a non-streamed answer
+does: `tier` is the chosen Tier, `MEDIUM` after Tier Failover, or empty for a fallback's answer;
+`analyzer` is the one Analyzer request, or empty when the call went to the Interim Binding
+without asking the Analyzer. The spending-ceiling counting described above is for non-streamed
+calls: a routed stream that finishes is not counted at all (streams are not counted, step 15),
+but one that is cancelled, including during failover, still counts the Analyzer request already
+paid (step 19).
+
 Upgrading from a version without this step: routed calls now use the fallback lists you declared,
 so if you set `default_fallbacks`, or a list in `fallbacks` for a model one of your Tiers is bound
 to, routed calls whose Tier fails now send those fallbacks too. A model's list serves both plain
@@ -935,11 +954,12 @@ your own calls.
 A call can be stopped cleanly in either mode. Once it stops, nothing more is sent, nothing is
 cached, no retry or fallback is tried, and one `call_cancelled` event (step 8) is sent. An
 answer the provider already billed for (the model's, or the Analyzer's on a routed call) still
-counts towards your `spending_ceiling`. A cancelled call is not a failure, so it never sends
-`call_failed`. A call whose answer or error has already been announced ends as announced: a
-failure raises its own error, and an answer is returned unless the stop lands before it is
-stored in memory or counted against your ceiling. Then `call_succeeded` is followed by
-`call_cancelled` and the call raises.
+counts towards your `spending_ceiling`; for a routed stream, only the Analyzer's is counted, even
+mid-failover, since streamed answers are not counted (step 15). A cancelled call is not a
+failure, so it never sends `call_failed`. A call whose answer or error has already been
+announced ends as announced: a failure raises its own error, and an answer is returned unless
+the stop lands before it is stored in memory or counted against your ceiling. Then
+`call_succeeded` is followed by `call_cancelled` and the call raises.
 
 **With `completion`**, pass `cancel=CancelToken()` and call `token.cancel()` from any thread, or
 pass `deadline=` as a number of seconds from the start of the call, or both. The call checks
