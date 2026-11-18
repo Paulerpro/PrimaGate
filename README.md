@@ -142,11 +142,35 @@ fallback models (`fallbacks`, `default_fallbacks`), PrimaGate uses these classes
 comes next: temporary errors are retried and then moved on, errors of the second kind move on
 to the next endpoint or fallback, and errors of the third kind stop at once.
 
-A Tier Routing call (step 16) has one more step. When the Tier that was chosen is SMALL or
-POWERFUL and its model still fails after its retries and redundant endpoints, PrimaGate tries the
-MEDIUM Tier once, as one more attempt with its own retries and redundant endpoints. Only MEDIUM is
-tried, never another Tier, and never more than once. A call that chose MEDIUM, and a plain call,
-have no such step. Errors of the third kind on the chosen Tier stop the call at once, as always.
+A Tier Routing call (step 16) goes through up to three steps, in a fixed order:
+
+1. The chosen Tier's model, with its retries and redundant endpoints.
+2. Tier Failover: when the chosen Tier is SMALL or POWERFUL, MEDIUM once, as one more attempt
+   with its own retries and redundant endpoints (or a `skipped` row saying why it could not run).
+   Only MEDIUM is tried, never another Tier, and never more than once. A call that chose MEDIUM
+   has no such step.
+3. Your fallback models, strictly in the order you listed them.
+
+Errors of the first or second kind move the call to the next step; errors of the third kind at
+any step stop the whole chain at once, as always.
+
+The list used is the one you declared for the chosen Tier's model in `fallbacks`, or
+`default_fallbacks` when that model has no list of its own. When routing could not choose (step
+16), the list is the one for the model of the Tier the call actually went to: your
+`interim_binding` Tier, or the nearest able Tier when that one cannot take the request. Each
+fallback is a plain model, so it is treated exactly as in a plain call: it never goes back through
+Tier Routing, it has its own retries and redundant endpoints, it is judged by what its provider
+can do (not by any Tier's `limits`), and it is passed over with a `skipped` row when it cannot
+take the request. No model is sent twice in one call: an entry naming the chosen Tier's model is
+left out, and so is an entry naming MEDIUM's model when MEDIUM was tried as the failover. A MEDIUM
+passed over as `same model as the resolved Tier` is bound to the model that already ran, so its
+model stays out too. If MEDIUM was passed over for any other reason, an entry naming its model
+still runs, as a fallback. So a routed call makes at most one attempt on the chosen Tier, one on
+MEDIUM and one per fallback you declared, and PrimaGate never adds a model you did not list. Each
+attempt can itself be several requests: its retries on each of its redundant endpoints.
+
+A model's list in `fallbacks` serves both plain calls to that model and routed calls that resolve
+to it, and `default_fallbacks` applies to both; step 16 shows how to keep them apart.
 
 Every response and every error records what happened in `attempt_chain`: one row per model that
 was tried, in order, each listing its dispatches (the `endpoint`, the number of `retries` and the
@@ -166,13 +190,14 @@ fails with nothing passed over raises its own error, with `attempt_chain` attach
 a specific error such as `RateLimitError` around a call that has fallbacks, catch
 `AttemptsExhaustedError` as well and look at `error.last_error`.
 
-The same holds for a Tier Routing call whose chosen Tier is SMALL or POWERFUL. When that Tier
-fails with an error of the first or second kind, the call raises `AttemptsExhaustedError` even if
-MEDIUM was passed over and nothing else was sent, because the passed-over MEDIUM is a row of its
-own; `error.last_error` is then the chosen Tier's original error. Catch `AttemptsExhaustedError`
-around routed calls too. An error of the third kind is raised as itself, as before. If MEDIUM
-itself then fails with an error of the third kind, that error ends the chain at once and, since
-two models were tried, it arrives as the `last_error` of an `AttemptsExhaustedError`.
+The same holds for a Tier Routing call. When the chosen Tier SMALL or POWERFUL fails with an
+error of the first or second kind, the call raises `AttemptsExhaustedError` even if MEDIUM was
+passed over and nothing else was sent, because the passed-over MEDIUM is a row of its own.
+`error.last_error` is always the error of the last step that ran: the chosen Tier's, MEDIUM's, or
+the last fallback's once fallbacks run. Catch `AttemptsExhaustedError` around routed calls too.
+An error of the third kind on the chosen Tier, with nothing else tried, is raised as itself, as
+before. Once a second model has been tried (MEDIUM or a fallback), an error of the third kind
+still ends the chain at once, but it arrives as the `last_error` of an `AttemptsExhaustedError`.
 
 ```python
 from primagate import AttemptsExhaustedError, PrimaGateError, completion
@@ -641,7 +666,8 @@ Optional:
   really ask the Analyzer take a place in it: a repeat answered from memory, or a request only one
   Tier can take, does not.
 - `spending_ceiling`: US dollars. A warning, never a limit. Once the estimated cost of the calls
-  made with the alias, each one's answer plus its Analyzer request, passes it, one
+  made with the alias, each one's answer plus its Analyzer request, passes it (the answer is
+  counted whichever model gave it: the chosen Tier, MEDIUM after Tier Failover, or a fallback), one
   `spending_ceiling_exceeded` event is sent with the ceiling and the total, and it is also
   written to the `primagate` log as a warning. It is sent once, and nothing about any call
   changes: later calls are routed and answered exactly as before. The total is kept in memory
@@ -746,7 +772,10 @@ example `MEDIUM:openai/gpt-4o`), never message content. Each call is decided on 
 step of a tool loop has its own decision. `profile_id` and `input_fingerprint` say `unknown`
 unless a prepared Profile was pinned for the call (step 18). The response's `metadata.tier` names
 the Tier that answered and `metadata.analyzer` holds what the Analyzer cost, apart from
-`metadata.cost`.
+`metadata.cost`. `metadata.tier` is empty when no Tier answered: for an answer from a fallback
+model (below) and for an answer from memory. Tell them apart by `metadata.cache_hit`, which is
+true only for the answer from memory; a fresh routed answer, a fallback's included, also has
+`metadata.analyzer` set whenever the Analyzer was asked.
 
 A repeated call that is answered from memory asks nobody: it has no `routing_decision`, and its
 `metadata.tier` and `metadata.analyzer` are empty. Every other alias call with two or more
@@ -788,7 +817,20 @@ only `metadata.tier` moves to the Tier that answered. The move itself shows as a
 event whose `next` is `next_attempt`, the same value a move to a fallback uses, followed by a
 `dispatch_started` for MEDIUM's model.
 
-A fallback list is not applied to alias calls yet. The alias cannot be used in a fallback list.
+If MEDIUM fails too, or there was no failover, the call moves on to your fallback models (step 7),
+using the list declared for the chosen Tier's model. An answer from a fallback has an empty
+`metadata.tier`, since no Tier gave it, and `metadata.analyzer` still shows the one Analyzer
+request. The spending ceiling counts that fallback's answer plus the one Analyzer cost. The answer
+is cached like any routed answer, unless the call had gone to the Interim Binding: it is stored
+under the call's own key, so an identical routed call gets the fallback's answer back from memory
+(step 12) even after the chosen Tier has recovered. The alias cannot be used in a fallback list.
+
+Upgrading from a version without this step: routed calls now use the fallback lists you declared,
+so if you set `default_fallbacks`, or a list in `fallbacks` for a model one of your Tiers is bound
+to, routed calls whose Tier fails now send those fallbacks too. A model's list serves both plain
+calls to it and routed calls that resolve to it. To keep `default_fallbacks` off routed calls that
+resolve to a model, give that model an empty list, such as `fallbacks={"gpt-4o-mini": []}`; that
+also turns fallbacks off for plain calls to that model.
 
 ### 17. What the Analyzer reads
 

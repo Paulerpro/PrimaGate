@@ -292,6 +292,22 @@ def _tier_failover(routing: Routing, tier: Tier, chosen: Dispatch) -> Dispatch |
     return medium
 
 
+def _routed_fallbacks(
+    resolved: tuple[str, str], failover: Dispatch | Attempt | None, fallbacks: Fallbacks
+) -> tuple[tuple[str, str], ...]:
+    """The Fallback List a routed call tries after Tier Failover.
+
+    The list is the one declared for the resolved Tier's model, as a plain call to that model
+    would use. MEDIUM's model is dropped only when it really runs as the failover; a MEDIUM that
+    was passed over was never tried, so the Caller's entry for it still gets its turn.
+    """
+    later = fallback_candidates(resolved, fallbacks)
+    if isinstance(failover, Dispatch):
+        ran = (failover.provider, failover.request.model)
+        later = tuple(entry for entry in later if entry != ran)
+    return later
+
+
 def first_action(
     request: ChatCompletionRequest,
     capabilities: Mapping[str, Capabilities],
@@ -346,8 +362,9 @@ def count_attempts(chain: Sequence[Attempt]) -> int:
 def _carried(built: Dispatch, action: Dispatch, past: Sequence[Attempt], plan: Plan) -> Dispatch:
     """`built` as the call's next Attempt, with what the call carries and what is left after.
 
-    `tier` is not carried: each caller sets it, since only Tier Failover knows the Tier (MEDIUM)
-    its Attempt serves, and an Attempt without one is not counted against the spending ceiling.
+    `tier` is not carried: only Tier Failover knows the Tier (MEDIUM) its Attempt serves, so a
+    fallback's answer reports none. The spending ceiling is carried, so whatever answers a routed
+    call is still counted against it.
     """
     return dataclasses.replace(
         built,
@@ -539,16 +556,17 @@ def start(
         binding = routing.tiers.bindings[tier]
         usage = analysis.usage if analysis else None
         failover = _tier_failover(routing, tier, chosen)
+        later = _routed_fallbacks((binding.provider, binding.model_id), failover, fallbacks)
         plan = (
             None
-            if failover is None
+            if failover is None and not later
             else Plan(
                 request=request,
                 capabilities=capabilities,
                 drops=policy,
                 routing=routes,
                 retry=retry,
-                later=(),
+                later=later,
                 failover=failover,
             )
         )
@@ -796,7 +814,8 @@ def _owed(action: Action) -> tuple[float, float] | None:
 
     Follows the steps already decided until it meets the pending spend record, or the dispatch
     that carries the Analyzer's cost. A worker answer still being counted has no cost yet, so
-    only the Analyzer's is owed then.
+    only the Analyzer's is owed then. Only a routed call carries a spending ceiling, so the
+    ceiling alone decides, whichever model the call was on when it stopped.
     """
     while True:
         if isinstance(action, RecordSpend):
@@ -812,7 +831,7 @@ def _owed(action: Action) -> tuple[float, float] | None:
         else:
             return None
     usage, ceiling = action.analyzer, action.spending_ceiling
-    if action.tier is None or ceiling is None or usage is None or usage.cost is None:
+    if ceiling is None or usage is None or usage.cost is None:
         return None
     paid = usage.cost.total
     # The same guard as a finished call: a bad price would poison the total for good.
@@ -843,11 +862,12 @@ def _written(action: Action, following: Action) -> Action:
 def _spent(action: Action, following: Action) -> Action:
     """Count a finished routed call against the ceiling, if the Policy set one.
 
-    The answer is returned whatever the count says: the ceiling only ever warns.
+    Only a routed call carries a ceiling, so the ceiling alone decides: a fallback's answer has no
+    Tier but is still the routed call's spend. The answer is returned whatever the count says: the
+    ceiling only ever warns.
     """
     if not (
         isinstance(action, Dispatch)
-        and action.tier is not None
         and action.spending_ceiling is not None
         and isinstance(following, Return)
     ):
