@@ -134,6 +134,9 @@ and the class tells you why:
 - `BadRequestError`, `UnsupportedParamsError` and `ImageFetchError` mean the request itself is
   wrong, so trying elsewhere would not help.
 
+`CancelledError` is not a failure: it means you cancelled the call (step 19), so nothing is
+retried or moved on to.
+
 A plain call makes one request. If you declare redundant endpoints (`provider_routing`) or
 fallback models (`fallbacks`, `default_fallbacks`), PrimaGate uses these classes to decide what
 comes next: temporary errors are retried and then moved on, errors of the second kind move on
@@ -215,6 +218,9 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
 - `cost_unknown`: the model that answered has no price, so there is no cost Estimate (see step 10).
 - `call_succeeded` and `call_failed`: a call that was sent is over. A call answered from memory
   ends with `cache_hit` instead.
+- `call_cancelled`: you cancelled the call, so it stopped (see step 19). It carries only the
+  `request_id`. It can follow `call_succeeded` when the stop lands after the answer arrived but
+  before the answer was stored in memory: the call then raises and the answer is not cached.
 - `routing_decision`, `low_confidence_downgrade`, `premium_routing_selected` and
   `routing_degraded`: decision events for Tier Routing (see steps 13 and 16).
 - `spending_ceiling_exceeded`: routed calls, together with Profile preparation's Analyzer
@@ -846,6 +852,102 @@ your own calls.
 - **Forking.** Create the instance after your process forks, for example inside each worker of a
   pre-forking server, never before. Fork safety is not guaranteed in this version: a child forked
   while a preparation runs can inherit its locks half-held.
+
+### 19. Cancel a call
+
+A call can be stopped cleanly in either mode. Once it stops, nothing more is sent, nothing is
+cached, no retry or fallback is tried, and one `call_cancelled` event (step 8) is sent. An
+answer the provider already billed for (the model's, or the Analyzer's on a routed call) still
+counts towards your `spending_ceiling`. A cancelled call is not a failure, so it never sends
+`call_failed`. A call whose answer or error has already been announced ends as announced: a
+failure raises its own error, and an answer is returned unless the stop lands before it is
+stored in memory or counted against your ceiling. Then `call_succeeded` is followed by
+`call_cancelled` and the call raises.
+
+**With `completion`**, pass `cancel=CancelToken()` and call `token.cancel()` from any thread, or
+pass `deadline=` as a number of seconds from the start of the call, or both. The call checks
+them before each step it takes (each request, retry wait, cache or Analyzer step) and before
+each chunk of a stream, and raises `primagate.CancelledError` at the first one it finds
+cancelled or past its deadline. A stream stopped this way is closed and yields no more chunks.
+Without either setting, a call behaves exactly as before.
+
+```python
+from primagate import CancelledError, CancelToken, PrimaGate
+
+gate = PrimaGate()
+token = CancelToken()
+# Any other thread can stop the call, for example a "Stop" button's handler: token.cancel()
+try:
+    response = gate.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Say hello in five words."}],
+        cancel=token,
+        deadline=30,
+    )
+except CancelledError:
+    print("The call was stopped before it finished.")
+else:
+    print(response.choices[0].message.content)
+```
+
+**With `acompletion`**, cancel the task, as for any other asyncio work: `task.cancel()`,
+`asyncio.wait_for(...)` or `asyncio.timeout(...)`. The call stops where it is, sends
+`call_cancelled`, and lets `asyncio.CancelledError` through, so your task stays cancelled.
+Cancelling the task while you read a stream does the same and closes the stream.
+`acompletion` takes `cancel=` and `deadline=` too, checked at the same points, and then raises
+`primagate.CancelledError`.
+
+```python
+import asyncio
+
+from primagate import PrimaGate
+
+
+async def main() -> None:
+    gate = PrimaGate()
+    try:
+        # wait_for cancels the call's task if no answer has come within 30 seconds.
+        response = await asyncio.wait_for(
+            gate.acompletion(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Say hello in five words."}],
+            ),
+            timeout=30,
+        )
+        print(response.choices[0].message.content)
+    except TimeoutError:
+        print("No answer within 30 seconds.")
+    finally:
+        await gate.aclose()
+
+
+asyncio.run(main())
+```
+
+`cancel` must be a `CancelToken`, and `deadline` a number of seconds above 0; anything else
+raises `BadRequestError` before the call starts.
+
+- **A request already sent is not interrupted** by a token or deadline: PrimaGate cannot safely
+  cut off a blocking network read, so the call stops at its next step after that request
+  returns, and your `timeout` (60 seconds by default) still bounds how long that is. A retry
+  wait already begun in `completion` likewise runs out before the call stops. Cancelling an
+  `acompletion` task, by contrast, interrupts the request or the wait at once.
+- **Close a stream you stop reading**, with `close()`, `await stream.aclose()` or a `with`
+  (`async with`) block. Cancellation is noticed on the next read, so a stream you simply drop
+  is never told.
+- **A token is one-shot.** Once cancelled it stays cancelled, and every later call given it
+  stops at once. One token shared by several calls stops them all. Use a new token per call
+  unless you mean that.
+- **The deadline keeps running while you read a stream**: it counts from the start of the call,
+  not from the first chunk.
+- **In async code that passes `cancel=` or `deadline=`, expect two errors**:
+  `asyncio.CancelledError` when the task was cancelled, and `primagate.CancelledError`
+  (`from primagate import CancelledError`) when the token or deadline stopped the call. If you
+  catch `asyncio.CancelledError`, raise it again so the task stays cancelled.
+- **Analyzer permits come back.** A call cancelled while the Analyzer is deciding releases its
+  place under `max_concurrent_analyzer_calls`, so the next call can ask.
+- **Background preparation is not a call.** Cancelling a call never stops a preparation it
+  started; `close()` and `aclose()` do (step 18).
 
 ## Notes
 

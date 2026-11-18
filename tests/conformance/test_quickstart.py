@@ -53,7 +53,7 @@ def test_every_error_class_is_exported_from_the_package_root() -> None:
     # The root exports the errors, the events, the entry points and the one value for a fact a
     # provider does not disclose.
     others = {"PrimaGate", "__version__", "acompletion", "completion", "Unknown", "UNKNOWN"}
-    others |= {"TIER_ROUTING_ALIAS", "FileProfileStore"}
+    others |= {"TIER_ROUTING_ALIAS", "FileProfileStore", "CancelToken"}
     others |= set(events.EXPORTED)
     assert set(primagate.__all__) == set(classes) | others
 

@@ -32,6 +32,7 @@ from primagate.drivers._shared import (
     settle,
 )
 from primagate.drivers.cache import ResponseCache
+from primagate.drivers.cancel import CancelToken, Watch, cancelled, due, stop
 from primagate.drivers.capacity import AnalyzerCap
 from primagate.drivers.preparation import (
     PreparationRunner,
@@ -70,12 +71,21 @@ _NOTHING = object()
 class AsyncStream:
     """Chunks of one streamed response. The driver opens it and reads up to the first chunk."""
 
-    def __init__(self, source: AsyncEventStream, state: StreamState) -> None:
+    def __init__(
+        self,
+        source: AsyncEventStream,
+        state: StreamState,
+        watch: Watch | None = None,
+        on_cancel: Callable[[], object] | None = None,
+    ) -> None:
         self._source = source
         self._events = source.events()
         self._state = state
         self._ahead: object = _NOTHING
         self._closed = False
+        self._watch = watch
+        self._on_cancel = on_cancel
+        self._stopped = False
 
     async def _read(self) -> object:
         if self._closed:
@@ -104,14 +114,32 @@ class AsyncStream:
         return self
 
     async def __anext__(self) -> ChatCompletionChunk:
+        # Checked before each chunk; once closed, the stream only ever ends, so this runs once.
+        if self._watch is not None and not self._closed and self._watch.reached():
+            try:
+                await self.aclose()
+            finally:
+                # Sent even when closing fails or is cancelled, so the stop is always reported.
+                self._cancelled()
+            raise cancelled()
         item = END if self._closed else self._ahead
         if item is _NOTHING:
-            item = await self._read()
+            try:
+                item = await self._read()
+            except asyncio.CancelledError:
+                # `_read` has already closed the stream.
+                self._cancelled()
+                raise
         self._ahead = _NOTHING
         if item is END:
             raise StopAsyncIteration
         assert isinstance(item, ChatCompletionChunk)
         return item
+
+    def _cancelled(self) -> None:
+        if not self._stopped and self._on_cancel is not None:
+            self._stopped = True
+            self._on_cancel()
 
     async def aclose(self) -> None:
         self._closed = True
@@ -234,11 +262,24 @@ class AsyncDriver:
         )
 
     async def run(
-        self, request: ChatCompletionRequest, drop_params: object = None, use_cache: bool = True
+        self,
+        request: ChatCompletionRequest,
+        drop_params: object = None,
+        use_cache: bool = True,
+        cancel: CancelToken | None = None,
+        deadline: float | None = None,
     ) -> ChatCompletion:
         action = self._first(request, drop_params, use_cache)
+        watch = Watch.begin(cancel, deadline)
         while True:
-            step = await self.perform(action)
+            if due(watch, action):
+                action = stop(action, self._event_handler, self._spend)
+            try:
+                step = await self.perform(action)
+            except asyncio.CancelledError:
+                # Reported to core, then let through: a cancelled task must stay cancelled.
+                stop(action, self._event_handler, self._spend)
+                raise
             if isinstance(step, Finished):
                 return step.response
             if isinstance(step, Prepared):
@@ -246,23 +287,36 @@ class AsyncDriver:
             action = advance(action, step)
 
     async def stream(
-        self, request: ChatCompletionRequest, drop_params: object = None
+        self,
+        request: ChatCompletionRequest,
+        drop_params: object = None,
+        cancel: CancelToken | None = None,
+        deadline: float | None = None,
     ) -> AsyncStream:
         action = self._first(request, drop_params)
+        watch = Watch.begin(cancel, deadline)
         while True:
-            if isinstance(action, steps.Dispatch):
-                opened = await self._open(action)
-                if isinstance(opened, AsyncStream):
-                    return opened
-                step: steps.Outcome = opened
-            else:
-                performed = await self.perform(action)
-                if isinstance(performed, Finished | Prepared):
-                    raise PrimaGateError("Stream request produced no dispatch")
-                step = performed
+            if due(watch, action):
+                action = stop(action, self._event_handler, self._spend)
+            try:
+                if isinstance(action, steps.Dispatch):
+                    opened = await self._open(action, watch)
+                    if isinstance(opened, AsyncStream):
+                        return opened
+                    step: steps.Outcome = opened
+                else:
+                    performed = await self.perform(action)
+                    if isinstance(performed, Finished | Prepared):
+                        raise PrimaGateError("Stream request produced no dispatch")
+                    step = performed
+            except asyncio.CancelledError:
+                stop(action, self._event_handler, self._spend)
+                raise
             action = advance(action, step)
 
-    async def _open(self, action: steps.Dispatch) -> AsyncStream | steps.DispatchOutcome:
+    async def _open(
+        self, action: steps.Dispatch, watch: Watch | None = None
+    ) -> AsyncStream | steps.DispatchOutcome:
         """Open a stream and read to its first chunk; failing before that can be retried."""
         provider_request = prepare(self._adapters, self._settings, action)
         opened = await self._transport.open_stream(provider_request)
@@ -270,7 +324,9 @@ class AsyncDriver:
             return settle(self._adapters, self._settings, action, opened)
         key = credentials(self._settings, action).api_key
         state = StreamState(self._adapters[action.provider], key, opened.headers, action)
-        stream = AsyncStream(opened, state)
+        stream = AsyncStream(
+            opened, state, watch, lambda: stop(action, self._event_handler, self._spend)
+        )
         try:
             await stream.prime()
         except PrimaGateError as err:
@@ -485,6 +541,10 @@ class AsyncDriver:
     async def _preparation_done(self, action: steps.PreparationDone) -> Step:
         return Prepared(action.state, action.profile)
 
+    async def _stopped(self, action: steps.Stopped) -> Step:
+        # Reached only through the token or deadline; a cancelled task re-raises its own error.
+        raise cancelled()
+
     HANDLERS: ClassVar[dict[type, Callable[[Any, Any], Awaitable[Step]]]] = {
         steps.Dispatch: _dispatch,
         steps.Analyze: _analyze,
@@ -503,4 +563,5 @@ class AsyncDriver:
         steps.StoreRead: _store_read,
         steps.StoreWrite: _store_write,
         steps.PreparationDone: _preparation_done,
+        steps.Stopped: _stopped,
     }

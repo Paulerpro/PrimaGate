@@ -116,6 +116,16 @@ class CallFailed(Event):
 
 
 @dataclass(frozen=True)
+class CallCancelled(Event):
+    """The caller cancelled the call, so it stopped with nothing more sent, stored or counted.
+
+    Not a failure: the call ended because it was asked to.
+    """
+
+    event_type: ClassVar[str] = "call_cancelled"
+
+
+@dataclass(frozen=True)
 class DecisionEvent(Event):
     """What an operator needs to explain one routing decision, without any conversation content.
 
@@ -232,6 +242,7 @@ EVENT_CLASSES: tuple[type[Event], ...] = (
     CostUnknown,
     CallSucceeded,
     CallFailed,
+    CallCancelled,
     RoutingDecision,
     LowConfidenceDowngrade,
     PremiumRoutingSelected,

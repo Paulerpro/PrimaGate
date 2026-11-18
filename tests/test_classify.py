@@ -40,8 +40,13 @@ def test_every_error_class_has_a_stated_fate() -> None:
     concrete = {
         c for c in vars(errors).values() if isinstance(c, type) and c.__module__ == errors.__name__
     }
-    # The aggregate is built after the chain has stopped, so it is never classified itself.
-    assert concrete - named == {errors.PrimaGateError, errors.AttemptsExhaustedError}
+    # The aggregate is built after the chain has stopped, and a cancellation is raised by the
+    # driver once the call has stopped, so neither is ever classified itself.
+    assert concrete - named == {
+        errors.PrimaGateError,
+        errors.AttemptsExhaustedError,
+        errors.CancelledError,
+    }
 
 
 def test_an_unclassified_error_stops_the_chain() -> None:

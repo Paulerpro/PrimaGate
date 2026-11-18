@@ -1,10 +1,12 @@
 from primagate.client import PrimaGate, acompletion, completion
+from primagate.drivers.cancel import CancelToken
 from primagate.schema.errors import (
     APIConnectionError,
     APIError,
     AttemptsExhaustedError,
     AuthenticationError,
     BadRequestError,
+    CancelledError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     ImageFetchError,
@@ -19,6 +21,7 @@ from primagate.schema.errors import (
 from primagate.schema.events import (
     AttemptSkipped,
     CacheHit,
+    CallCancelled,
     CallFailed,
     CallSucceeded,
     CostUnknown,
@@ -54,7 +57,10 @@ __all__ = [
     "AttemptsExhaustedError",
     "AuthenticationError",
     "BadRequestError",
+    "CancelToken",
+    "CancelledError",
     "CacheHit",
+    "CallCancelled",
     "CallFailed",
     "CallSucceeded",
     "CostUnknown",

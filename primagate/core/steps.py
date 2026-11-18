@@ -144,6 +144,11 @@ class CountTokens:
     prompt: str
     completion: str
     resume: Callable[[CountOutcome], Action]
+    # The call's own, so a cancellation here is reported against it.
+    request_id: str = ""
+    # The dispatch whose answer is counted, so a cancellation here still counts what an earlier
+    # Analyzer request was billed.
+    dispatch: Dispatch | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +157,8 @@ class CacheRead:
 
     key: str
     resume: Callable[[CacheReadOutcome], Action]
+    # The call's own, so a cancellation here is reported against it.
+    request_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -161,6 +168,8 @@ class CacheWrite:
     key: str
     response: ChatCompletion
     resume: Action
+    # The call's own, so a cancellation here is reported against it.
+    request_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -201,6 +210,8 @@ class RecordSpend:
     amount: float
     ceiling: float
     resume: Callable[[SpendOutcome], Action]
+    # The call's own, so a cancellation here is reported against it.
+    request_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -213,6 +224,8 @@ class StartPreparation:
 
     fingerprint: str
     resume: Callable[[StartOutcome], Action]
+    # The call's own, so a cancellation here is reported against it.
+    request_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -221,6 +234,12 @@ class PreparationDone:
 
     state: PrepState
     profile: Profile | None
+
+
+@dataclass(frozen=True)
+class Stopped:
+    """The call was cancelled and has stopped; the driver turns this into the caller's
+    cancellation."""
 
 
 Action = (
@@ -241,6 +260,7 @@ Action = (
     | RecordSpend
     | StartPreparation
     | PreparationDone
+    | Stopped
 )
 
 # Drivers must handle exactly these; a test fails when one lacks a handler.
@@ -262,6 +282,7 @@ ACTION_TYPES: tuple[type[Action], ...] = (
     RecordSpend,
     StartPreparation,
     PreparationDone,
+    Stopped,
 )
 
 
@@ -354,6 +375,14 @@ class StoreWriteOutcome:
     pass
 
 
+@dataclass(frozen=True)
+class Cancelled:
+    """The caller stopped the call before the action was performed, or while it ran.
+
+    An outcome, never an error, so core alone decides that nothing more is done.
+    """
+
+
 Outcome = (
     DispatchOutcome
     | Declined
@@ -369,4 +398,5 @@ Outcome = (
     | CacheWriteOutcome
     | StoreReadOutcome
     | StoreWriteOutcome
+    | Cancelled
 )

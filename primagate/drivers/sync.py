@@ -32,6 +32,7 @@ from primagate.drivers._shared import (
     settle,
 )
 from primagate.drivers.cache import ResponseCache
+from primagate.drivers.cancel import CancelToken, Watch, cancelled, due, stop
 from primagate.drivers.capacity import AnalyzerCap
 from primagate.drivers.preparation import (
     PreparationRunner,
@@ -70,12 +71,21 @@ _NOTHING = object()
 class SyncStream:
     """Chunks of one streamed response. The driver opens it and reads up to the first chunk."""
 
-    def __init__(self, source: SyncEventStream, state: StreamState) -> None:
+    def __init__(
+        self,
+        source: SyncEventStream,
+        state: StreamState,
+        watch: Watch | None = None,
+        on_cancel: Callable[[], object] | None = None,
+    ) -> None:
         self._source = source
         self._events = source.events()
         self._state = state
         self._ahead: object = _NOTHING
         self._closed = False
+        self._watch = watch
+        self._on_cancel = on_cancel
+        self._stopped = False
 
     def _read(self) -> object:
         if self._closed:
@@ -104,6 +114,14 @@ class SyncStream:
         return self
 
     def __next__(self) -> ChatCompletionChunk:
+        # Checked before each chunk; once closed, the stream only ever ends, so this runs once.
+        if self._watch is not None and not self._closed and self._watch.reached():
+            try:
+                self.close()
+            finally:
+                # Sent even when closing fails, so the stop is always reported.
+                self._cancelled()
+            raise cancelled()
         item = END if self._closed else self._ahead
         if item is _NOTHING:
             item = self._read()
@@ -112,6 +130,11 @@ class SyncStream:
             raise StopIteration
         assert isinstance(item, ChatCompletionChunk)
         return item
+
+    def _cancelled(self) -> None:
+        if not self._stopped and self._on_cancel is not None:
+            self._stopped = True
+            self._on_cancel()
 
     def close(self) -> None:
         self._closed = True
@@ -233,10 +256,19 @@ class SyncDriver:
         )
 
     def run(
-        self, request: ChatCompletionRequest, drop_params: object = None, use_cache: bool = True
+        self,
+        request: ChatCompletionRequest,
+        drop_params: object = None,
+        use_cache: bool = True,
+        cancel: CancelToken | None = None,
+        deadline: float | None = None,
     ) -> ChatCompletion:
         action = self._first(request, drop_params, use_cache)
+        watch = Watch.begin(cancel, deadline)
         while True:
+            # A blocking request cannot be interrupted safely, so the stop comes between steps.
+            if due(watch, action):
+                action = stop(action, self._event_handler, self._spend)
             step = self.perform(action)
             if isinstance(step, Finished):
                 return step.response
@@ -244,11 +276,20 @@ class SyncDriver:
                 raise PrimaGateError("A call ended as a preparation")
             action = advance(action, step)
 
-    def stream(self, request: ChatCompletionRequest, drop_params: object = None) -> SyncStream:
+    def stream(
+        self,
+        request: ChatCompletionRequest,
+        drop_params: object = None,
+        cancel: CancelToken | None = None,
+        deadline: float | None = None,
+    ) -> SyncStream:
         action = self._first(request, drop_params)
+        watch = Watch.begin(cancel, deadline)
         while True:
+            if due(watch, action):
+                action = stop(action, self._event_handler, self._spend)
             if isinstance(action, steps.Dispatch):
-                opened = self._open(action)
+                opened = self._open(action, watch)
                 if isinstance(opened, SyncStream):
                     return opened
                 step: steps.Outcome = opened
@@ -259,7 +300,9 @@ class SyncDriver:
                 step = performed
             action = advance(action, step)
 
-    def _open(self, action: steps.Dispatch) -> SyncStream | steps.DispatchOutcome:
+    def _open(
+        self, action: steps.Dispatch, watch: Watch | None = None
+    ) -> SyncStream | steps.DispatchOutcome:
         """Open a stream and read to its first chunk; failing before that can be retried."""
         provider_request = prepare(self._adapters, self._settings, action)
         opened = self._transport.open_stream(provider_request)
@@ -267,7 +310,9 @@ class SyncDriver:
             return settle(self._adapters, self._settings, action, opened)
         key = credentials(self._settings, action).api_key
         state = StreamState(self._adapters[action.provider], key, opened.headers, action)
-        stream = SyncStream(opened, state)
+        stream = SyncStream(
+            opened, state, watch, lambda: stop(action, self._event_handler, self._spend)
+        )
         try:
             stream.prime()
         except PrimaGateError as err:
@@ -473,6 +518,9 @@ class SyncDriver:
     def _preparation_done(self, action: steps.PreparationDone) -> Step:
         return Prepared(action.state, action.profile)
 
+    def _stopped(self, action: steps.Stopped) -> Step:
+        raise cancelled()
+
     HANDLERS: ClassVar[dict[type, Callable[[Any, Any], Step]]] = {
         steps.Dispatch: _dispatch,
         steps.Analyze: _analyze,
@@ -491,4 +539,5 @@ class SyncDriver:
         steps.StoreRead: _store_read,
         steps.StoreWrite: _store_write,
         steps.PreparationDone: _preparation_done,
+        steps.Stopped: _stopped,
     }

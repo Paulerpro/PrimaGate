@@ -27,6 +27,7 @@ from primagate.core.steps import (
     CacheReadOutcome,
     CacheWrite,
     CacheWriteOutcome,
+    Cancelled,
     CountOutcome,
     CountTokens,
     Declined,
@@ -52,6 +53,7 @@ from primagate.core.steps import (
     SpendOutcome,
     StartOutcome,
     StartPreparation,
+    Stopped,
     StoreRead,
     StoreReadOutcome,
     StoreWrite,
@@ -467,7 +469,7 @@ def start(
         first = dataclasses.replace(first, cache_key=key)
         if read_already:
             return Emit((_started(first),), first)
-        return CacheRead(key, lambda read: _after_read(first, read))
+        return CacheRead(key, lambda read: _after_read(first, read), request_id)
 
     def failed(request_id: str, error: PrimaGateError) -> Action:
         return Emit((_call_failed(request_id, error),), Raise(error))
@@ -556,7 +558,7 @@ def start(
             reason = "preparation_failed" if outcome.state is PrepState.FAILED else "preparing"
             return degrade(routing, reason, request_id, key, read_already)
 
-        return StartPreparation(fingerprint, pinned)
+        return StartPreparation(fingerprint, pinned, request_id)
 
     def choosing(
         routing: Routing,
@@ -614,7 +616,7 @@ def start(
                 routing, chosen, request_id, analysis, key, read_already, profile=profile
             )
 
-        return Analyze(begun, after)
+        return Analyze(dataclasses.replace(begun, request_id=request_id), after)
 
     def begin(request_id: str, key: str | None = None, read_already: bool = False) -> Action:
         first = first_action(request, capabilities, policy, routing, retry, fallbacks, tier_routing)
@@ -642,7 +644,7 @@ def start(
             hit = dataclasses.replace(read.response, metadata=Metadata(cache_hit=True))
             return Emit((events.CacheHit(request_id, request.model, key),), Return(hit))
 
-        return CacheRead(key, after)
+        return CacheRead(key, after, request_id)
 
     routed = request.model == TIER_ROUTING_ALIAS and tier_routing is not None and cacheable
     return NewId(begin_routed if routed else begin)
@@ -650,6 +652,10 @@ def start(
 
 def advance(action: Action, outcome: Outcome) -> Action:
     """Like `next_action`, and also says what happened so the driver can deliver the events."""
+    # Answered before anything else, so no retry, fallback, cache write, spend record or
+    # degrade can follow a cancellation, whatever the action was.
+    if isinstance(outcome, Cancelled):
+        return _cancelled(action)
     if isinstance(action, NewId) and isinstance(outcome, IdOutcome):
         return action.resume(outcome.value)
     if isinstance(action, Now) and isinstance(outcome, NowOutcome):
@@ -698,8 +704,58 @@ def advance(action: Action, outcome: Outcome) -> Action:
             prompt_text(action.request),
             completion_text(answered),
             lambda counted: _announced(action, outcome, _counted(action, answered, counted)),
+            action.request_id,
+            action,
         )
     return _announced(action, outcome, following)
+
+
+def _cancelled(action: Action) -> Action:
+    """Stop the call: count what it was already billed for, then announce the cancellation."""
+    request_id = _request_id(action) or "unknown"
+    stopped = Emit((events.CallCancelled(request_id),), Stopped())
+    owed = _owed(action)
+    if owed is None:
+        return stopped
+    amount, ceiling = owed
+
+    def after(counted: SpendOutcome) -> Action:
+        if not counted.crossed:
+            return stopped
+        warning = events.SpendingCeilingExceeded(request_id, ceiling, counted.total)
+        return Emit((warning,), stopped)
+
+    return RecordSpend(amount, ceiling, after, request_id)
+
+
+def _owed(action: Action) -> tuple[float, float] | None:
+    """The spend a cancelled call was billed for and has not yet counted, with its ceiling.
+
+    Follows the steps already decided until it meets the pending spend record, or the dispatch
+    that carries the Analyzer's cost. A worker answer still being counted has no cost yet, so
+    only the Analyzer's is owed then.
+    """
+    while True:
+        if isinstance(action, RecordSpend):
+            return action.amount, action.ceiling
+        if isinstance(action, Emit | CacheWrite):
+            action = action.resume
+        elif isinstance(action, Random | Sleep) and isinstance(action.resume, Dispatch):
+            action = action.resume
+        elif isinstance(action, CountTokens) and action.dispatch is not None:
+            action = action.dispatch
+        elif isinstance(action, Dispatch):
+            break
+        else:
+            return None
+    usage, ceiling = action.analyzer, action.spending_ceiling
+    if action.tier is None or ceiling is None or usage is None or usage.cost is None:
+        return None
+    paid = usage.cost.total
+    # The same guard as a finished call: a bad price would poison the total for good.
+    if not (math.isfinite(paid) and paid >= 0):
+        return None
+    return paid, ceiling
 
 
 def _announced(action: Action, outcome: Outcome, following: Action) -> Action:
@@ -717,7 +773,7 @@ def _written(action: Action, following: Action) -> Action:
         and not action.no_cache
         and isinstance(following, Return)
     ):
-        return CacheWrite(action.cache_key, following.response, final)
+        return CacheWrite(action.cache_key, following.response, final, action.request_id)
     return final
 
 
@@ -749,7 +805,7 @@ def _spent(action: Action, following: Action) -> Action:
         warning = events.SpendingCeilingExceeded(action.request_id, ceiling, counted.total)
         return Emit((warning,), following)
 
-    return RecordSpend(sum(paid), ceiling, after)
+    return RecordSpend(sum(paid), ceiling, after, action.request_id)
 
 
 def _after_read(first: Dispatch, read: CacheReadOutcome) -> Action:
@@ -781,10 +837,17 @@ def _counted(action: Dispatch, answered: ChatCompletion, counted: CountOutcome) 
 
 
 def _request_id(action: Action) -> str:
+    """The id of the call `action` belongs to; empty before the call has one."""
     if isinstance(action, Dispatch):
         return action.request_id
     if isinstance(action, Random | Sleep) and isinstance(action.resume, Dispatch):
         return action.resume.request_id
+    if isinstance(action, Analyze):
+        return action.dispatch.request_id
+    if isinstance(action, CacheRead | CacheWrite | CountTokens | RecordSpend | StartPreparation):
+        return action.request_id
+    if isinstance(action, Emit) and action.events:
+        return action.events[0].request_id
     return ""
 
 

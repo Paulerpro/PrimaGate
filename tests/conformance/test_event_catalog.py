@@ -33,6 +33,7 @@ EXAMPLES: dict[str, events.Event] = {
     "CostUnknown": events.CostUnknown("req-1", "mystery"),
     "CallSucceeded": events.CallSucceeded("req-1", "gpt-4o", 1, ()),
     "CallFailed": events.CallFailed("req-1", "ServiceUnavailableError", 503, 1),
+    "CallCancelled": events.CallCancelled("req-1"),
     "RoutingDecision": events.RoutingDecision("req-1", **DECISION),
     "LowConfidenceDowngrade": events.LowConfidenceDowngrade("req-1", **DECISION),
     "PremiumRoutingSelected": events.PremiumRoutingSelected("req-1", **DECISION),

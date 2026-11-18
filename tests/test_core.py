@@ -12,6 +12,7 @@ from primagate.core.call import (
     resolve_model,
 )
 from primagate.schema.errors import BadRequestError, RateLimitError, UnsupportedParamsError
+from primagate.schema.events import CallCancelled
 from primagate.schema.types import (
     Attempt,
     ChatCompletion,
@@ -62,6 +63,7 @@ def test_closed_action_set_is_exactly_the_actions_core_can_ask_for() -> None:
         "RecordSpend",
         "StartPreparation",
         "PreparationDone",
+        "Stopped",
     }
 
 
@@ -286,3 +288,205 @@ def test_dispatch_records_what_was_dropped_and_the_response_names_it() -> None:
     clean = next_action(action, steps.DispatchOutcome(response=_response()))
     assert isinstance(clean, steps.Return) and clean.response.metadata is not None
     assert clean.response.metadata.dropped_params == []
+
+
+# --- cancellation ---
+
+CANCEL_POLICY = {
+    "enabled_tiers": ["SMALL", "MEDIUM"],
+    "confidence_threshold": 0.8,
+    "context_token_budget": 1000,
+    "interim_binding": "MEDIUM",
+    "ambiguous_context_default": "SMALL",
+    "spending_ceiling": 100.0,
+}
+
+
+def _tiers(**kwargs: object) -> object:
+    from primagate import PrimaGate
+
+    gate = PrimaGate(
+        tier_bindings={"SMALL": {"model": "gpt-4o-mini"}, "MEDIUM": {"model": "gpt-4o"}},
+        policy=CANCEL_POLICY,
+        analyzer="gpt-4o-mini",
+        **kwargs,  # type: ignore[arg-type]
+    )
+    return gate._tier_routing
+
+
+def _verdict() -> ChatCompletion:
+    from primagate.schema.types import Usage
+
+    message = Message(role="assistant", content="SMALL 0.9")
+    return ChatCompletion(
+        id="a",
+        created=1,
+        model="gpt-4o-mini",
+        choices=[Choice(index=0, message=message)],
+        usage=Usage(10, 2, 12),
+    )
+
+
+def _outcome(action: steps.Action) -> steps.Outcome:
+    """A plain answer to every action a call can ask for, so a whole call can be walked."""
+    from primagate.schema.profile import PrepState
+
+    if isinstance(action, steps.NewId):
+        return steps.IdOutcome("req-1")
+    if isinstance(action, steps.CacheRead):
+        return steps.CacheReadOutcome(None)
+    if isinstance(action, steps.Emit):
+        return steps.EmitOutcome()
+    if isinstance(action, steps.Analyze):
+        return steps.DispatchOutcome(response=_verdict())
+    if isinstance(action, steps.Dispatch):
+        # No usage, so the call goes on to count the tokens itself.
+        return steps.DispatchOutcome(response=_response())
+    if isinstance(action, steps.CountTokens):
+        return steps.CountOutcome(5, 5, heuristic=False)
+    if isinstance(action, steps.CacheWrite):
+        return steps.CacheWriteOutcome()
+    if isinstance(action, steps.RecordSpend):
+        return steps.SpendOutcome(action.amount, crossed=False)
+    if isinstance(action, steps.StartPreparation):
+        return steps.StartOutcome(True, PrepState.PREPARING)
+    raise AssertionError(f"unexpected {type(action).__name__}")
+
+
+def _walk(first: steps.Action) -> list[steps.Action]:
+    """Every action of one call, up to the one that ends it."""
+    from primagate.core.call import advance
+
+    seen = [first]
+    while not isinstance(seen[-1], steps.Return | steps.Raise):
+        seen.append(advance(seen[-1], _outcome(seen[-1])))
+    return seen
+
+
+def _stopped(request_id: str) -> steps.Action:
+    return steps.Emit((CallCancelled(request_id),), steps.Stopped())
+
+
+def test_cancelled_is_an_outcome_and_stopped_a_terminal_action() -> None:
+    assert steps.Stopped in steps.ACTION_TYPES
+    assert steps.Cancelled() == steps.Cancelled()
+
+
+def test_a_call_cancelled_before_it_has_an_id_reports_unknown() -> None:
+    from primagate.core.call import advance, start
+
+    first = start(_request(), ALL)
+    assert isinstance(first, steps.NewId)
+    assert advance(first, steps.Cancelled()) == _stopped("unknown")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({}, id="plain"),
+        pytest.param({"use_cache": False}, id="no-cache"),
+        pytest.param({"tier_routing": "analyzer"}, id="routed"),
+        pytest.param({"tier_routing": "preparing"}, id="routed-preparing"),
+    ],
+)
+def test_every_boundary_of_a_call_stops_with_one_event_carrying_its_id(
+    kwargs: dict[str, object],
+) -> None:
+    from primagate.core.call import start
+    from primagate.schema.policy import TIER_ROUTING_ALIAS
+
+    request = _request()
+    routed = kwargs.pop("tier_routing", None)
+    if routed is not None:
+        request = _request(TIER_ROUTING_ALIAS)
+        sources = {"instructions": "be brief"} if routed == "preparing" else None
+        kwargs["tier_routing"] = _tiers(profile_sources=sources)
+    walked = _walk(start(request, ALL, **kwargs))  # type: ignore[arg-type]
+    assert isinstance(walked[-1], steps.Return)
+    kinds = {type(a) for a in walked}
+    if routed == "analyzer":
+        assert {steps.Analyze, steps.RecordSpend, steps.CacheWrite} <= kinds
+    if routed == "preparing":
+        assert steps.StartPreparation in kinds and steps.Analyze not in kinds
+    assert steps.CountTokens in kinds
+    asked = _first(walked, steps.Analyze)
+    counted = _first(walked, steps.CountTokens)
+    recorded = _first(walked, steps.RecordSpend)
+    if recorded == len(walked):
+        # Without a ceiling nothing is ever recorded.
+        recorded = -1
+    for index, action in enumerate(walked[1:-1], start=1):
+        name = type(action).__name__
+        announced, spent = _stop(action)
+        assert announced == [CallCancelled("req-1")], name
+        if counted < index <= recorded:
+            # The worker's answer is counted and priced: what the finished call would record.
+            record = walked[recorded]
+            assert isinstance(record, steps.RecordSpend)
+            assert spent == [record.amount], name
+        elif asked < index <= counted:
+            # Only the Analyzer has been billed so far.
+            worker = next(a for a in walked if type(a) is steps.Dispatch)
+            assert isinstance(worker, steps.Dispatch) and worker.analyzer is not None
+            assert worker.analyzer.cost is not None
+            assert spent == [worker.analyzer.cost.total], name
+        else:
+            assert spent == [], name
+    if routed == "analyzer":
+        assert counted - asked > 1
+
+
+def _first(walked: list[steps.Action], kind: type) -> int:
+    return next((i for i, a in enumerate(walked) if isinstance(a, kind)), len(walked))
+
+
+def _stop(action: steps.Action) -> tuple[list[object], list[float]]:
+    """Follow a cancellation to its end: what it announces and what it counts."""
+    from primagate.core.call import advance
+
+    announced: list[object] = []
+    spent: list[float] = []
+    following = advance(action, steps.Cancelled())
+    while not isinstance(following, steps.Stopped):
+        if isinstance(following, steps.Emit):
+            announced += following.events
+            following = advance(following, steps.EmitOutcome())
+        else:
+            assert isinstance(following, steps.RecordSpend)
+            spent.append(following.amount)
+            following = advance(following, steps.SpendOutcome(following.amount, crossed=False))
+    return announced, spent
+
+
+def test_a_cancelled_answer_is_not_cached_counted_or_spent() -> None:
+    from primagate.core.call import advance, start
+
+    walked = _walk(start(_request(), ALL))
+    write = next(a for a in walked if isinstance(a, steps.CacheWrite))
+    stopped = advance(write, steps.Cancelled())
+    assert isinstance(stopped, steps.Emit) and isinstance(stopped.resume, steps.Stopped)
+
+
+def test_a_cancelled_retry_or_fallback_goes_no_further() -> None:
+    from primagate.core.call import advance
+    from primagate.schema.errors import AuthenticationError
+    from primagate.schema.wire import Endpoint, Fallbacks
+
+    redundant = {("openai", "gpt-4o"): (Endpoint("https://b.test/v1"),)}
+    fallbacks = Fallbacks({("openai", "gpt-4o"): (("anthropic", "claude-sonnet-5-5"),)})
+    first = first_action(_request(), ALL, routing=redundant, fallbacks=fallbacks)
+    assert isinstance(first, steps.Dispatch)
+    first = dataclasses.replace(first, request_id="req-1")
+    retry = advance(first, steps.DispatchOutcome(error=RateLimitError("slow")))
+    assert isinstance(retry, steps.Emit) and isinstance(retry.resume, steps.Random)
+    wait = advance(retry.resume, steps.RandomOutcome(0.5))
+    assert isinstance(wait, steps.Emit) and isinstance(wait.resume, steps.Sleep)
+    for action in (retry.resume, wait.resume, wait):
+        assert advance(action, steps.Cancelled()) == _stopped("req-1")
+    # The last endpoint refuses the key, so the next fallback is due; cancelling stops it.
+    last = dataclasses.replace(first, endpoint=redundant[("openai", "gpt-4o")][0], position=1)
+    moved = advance(last, steps.DispatchOutcome(error=AuthenticationError("bad key")))
+    assert isinstance(moved, steps.Emit) and isinstance(moved.resume, steps.Dispatch)
+    assert moved.resume.provider == "anthropic"
+    for action in (moved, moved.resume):
+        assert advance(action, steps.Cancelled()) == _stopped("req-1")

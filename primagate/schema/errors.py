@@ -80,6 +80,14 @@ class ImageFetchError(PrimaGateError):
     pass
 
 
+class CancelledError(PrimaGateError):
+    """The call was stopped by its cancel token or its deadline.
+
+    Never a provider failure, so nothing retries or falls back on it. An async call whose task
+    was cancelled raises `asyncio.CancelledError` instead, as asyncio expects.
+    """
+
+
 class AttemptsExhaustedError(PrimaGateError):
     """Every Attempt failed (or none that could be made was left), so the chain is the story.
 

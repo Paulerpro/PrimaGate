@@ -14,6 +14,7 @@ from typing_extensions import Unpack
 from primagate.drivers._shared import EventHandler
 from primagate.drivers.async_ import AsyncDriver, AsyncStream
 from primagate.drivers.cache import DEFAULT_MAX_ENTRIES, ResponseCache
+from primagate.drivers.cancel import CancelToken
 from primagate.drivers.capacity import DEFAULT_MAX_CONCURRENT_ANALYZER_CALLS, AnalyzerCap
 from primagate.drivers.preparation import PreparationRunner
 from primagate.drivers.profile_store import ProfileStore, default_profile_store
@@ -65,6 +66,8 @@ class CallParams(TypedDict, total=False):
     response_format: Mapping[str, Any] | type | None
     drop_params: DropParams
     cache: bool | None
+    cancel: CancelToken | None
+    deadline: float | None
 
 
 class PlainCallParams(CallParams, total=False):
@@ -207,9 +210,10 @@ class PrimaGate:
         driver = self._get_driver()
         request, drop = _request(params), self._effective_drop_params(params)
         use_cache = _use_cache(params)
+        cancel, deadline = _cancellation(params)
         if request.stream:
-            return driver.stream(request, drop)
-        return driver.run(request, drop, use_cache)
+            return driver.stream(request, drop, cancel, deadline)
+        return driver.run(request, drop, use_cache, cancel, deadline)
 
     @overload
     async def acompletion(self, **params: Unpack[StreamCallParams]) -> AsyncStream: ...
@@ -229,9 +233,10 @@ class PrimaGate:
         driver = self._get_async_driver()
         request, drop = _request(params), self._effective_drop_params(params)
         use_cache = _use_cache(params)
+        cancel, deadline = _cancellation(params)
         if request.stream:
-            return await driver.stream(request, drop)
-        return await driver.run(request, drop, use_cache)
+            return await driver.stream(request, drop, cancel, deadline)
+        return await driver.run(request, drop, use_cache, cancel, deadline)
 
     def _effective_drop_params(self, params: AnyCallParams) -> DropParams:
         # Only None means unset, so False and [] switch an inherited opt-in off for one call.
@@ -345,6 +350,17 @@ def _use_cache(params: AnyCallParams) -> bool:
     if not isinstance(value, bool):
         raise BadRequestError("cache must be True, False or None")
     return value
+
+
+def _cancellation(params: AnyCallParams) -> tuple[CancelToken | None, float | None]:
+    token = params.get("cancel")
+    if token is not None and not isinstance(token, CancelToken):
+        raise BadRequestError("cancel must be a primagate.CancelToken or None")
+    deadline = params.get("deadline")
+    if deadline is None:
+        return token, None
+    # Zero or less would stop the call before it starts; nan and inf would never be reached.
+    return token, _delay_setting("deadline", deadline)
 
 
 def _delay_setting(name: str, value: object) -> float:
