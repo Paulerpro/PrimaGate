@@ -28,8 +28,12 @@ class DropPolicy:
 
 @dataclass(frozen=True)
 class Plan:
-    """What the next fallback needs, kept with the call because each candidate is judged by
-    its own provider's capabilities and routing when its turn comes."""
+    """What the next candidate needs, kept with the call.
+
+    Each fallback is judged by its own provider's capabilities and routing when its turn comes.
+    The failover slot is not: the Compatibility Filter builds it ahead, when routing runs, so
+    MEDIUM is judged with its binding's narrowed limits exactly as routing judged it.
+    """
 
     # The Caller's request before any drops or model-name stripping.
     request: ChatCompletionRequest
@@ -38,6 +42,9 @@ class Plan:
     routing: Mapping[tuple[str, str], tuple[Endpoint, ...]]
     retry: RetryPolicy
     later: tuple[tuple[str, str], ...]
+    # Tried before `later`: MEDIUM's dispatch as the filter built it for this request, or the
+    # skipped row saying why MEDIUM cannot run. None when the call has no Tier Failover.
+    failover: Dispatch | Attempt | None = None
 
 
 @dataclass(frozen=True)

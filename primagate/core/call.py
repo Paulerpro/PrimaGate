@@ -212,6 +212,10 @@ class Routing:
 
     candidates: tuple[tuple[Tier, Dispatch], ...]
     tiers: TierRouting
+    # Every Tier the filter let through, kept even when de-duplicated by model, and the reason
+    # for each it removed, so Tier Failover reuses the filter's verdict instead of redoing it.
+    built: Mapping[Tier, Dispatch] = dataclasses.field(default_factory=dict)
+    lacking: Mapping[Tier, str] = dataclasses.field(default_factory=dict)
 
 
 def _route_tier(
@@ -234,7 +238,8 @@ def _route_tier(
             "declare tier_bindings and a policy before using it"
         )
     able: list[tuple[Tier, Dispatch]] = []
-    lacking: list[str] = []
+    lacking: dict[Tier, str] = {}
+    shown: list[str] = []
     for tier in tiers.policy.enabled_tiers:
         binding = tiers.bindings[tier]
         provider, model = binding.provider, binding.model_id
@@ -253,15 +258,38 @@ def _route_tier(
         except UnsupportedParamsError as reason:
             # Only a missing feature means "this Tier cannot take it"; anything else is a fault
             # to report as it is, not to hide behind a feature message.
-            lacking.append(f"{tier.name} ({provider}/{model}): {reason.message}")
+            lacking[tier] = reason.message
+            shown.append(f"{tier.name} ({provider}/{model}): {reason.message}")
     # After the filter, so a model removed by one Tier's limits can still serve under another's.
     first_per_model: dict[tuple[str, str], tuple[Tier, Dispatch]] = {}
     for tier, built in able:
         first_per_model.setdefault((built.provider, built.request.model), (tier, built))
     unique = tuple(first_per_model.values())
     if not unique:
-        raise UnsupportedParamsError("No enabled Tier can take this request. " + "; ".join(lacking))
-    return Routing(unique, tiers)
+        raise UnsupportedParamsError("No enabled Tier can take this request. " + "; ".join(shown))
+    return Routing(unique, tiers, dict(able), lacking)
+
+
+def _tier_failover(routing: Routing, tier: Tier, chosen: Dispatch) -> Dispatch | Attempt | None:
+    """MEDIUM as the one Tier Failover for a call resolved to `tier`, or the row saying why it
+    cannot run. None for MEDIUM itself, which has nothing to fail over to.
+
+    The dispatch is the one the filter built for MEDIUM, with that Tier's own narrowed limits and
+    drops, so failover never judges MEDIUM differently from routing.
+    """
+    if tier is Tier.MEDIUM:
+        return None
+    binding = routing.tiers.bindings.get(Tier.MEDIUM)
+    shown = f"{binding.provider}/{binding.model_id}" if binding else Tier.MEDIUM.name
+    if Tier.MEDIUM not in routing.tiers.policy.enabled_tiers:
+        return Attempt(shown, [], skipped="MEDIUM is not in enabled_tiers")
+    if Tier.MEDIUM in routing.lacking:
+        return Attempt(shown, [], skipped=routing.lacking[Tier.MEDIUM])
+    medium = routing.built[Tier.MEDIUM]
+    # A model runs at most once per chain: its own Provider Routing has already been spent.
+    if (medium.provider, medium.request.model) == (chosen.provider, chosen.request.model):
+        return Attempt(shown, [], skipped="same model as the resolved Tier")
+    return medium
 
 
 def first_action(
@@ -315,16 +343,45 @@ def count_attempts(chain: Sequence[Attempt]) -> int:
     return sum(1 for row in chain if row.skipped is None)
 
 
+def _carried(built: Dispatch, action: Dispatch, past: Sequence[Attempt], plan: Plan) -> Dispatch:
+    """`built` as the call's next Attempt, with what the call carries and what is left after.
+
+    `tier` is not carried: each caller sets it, since only Tier Failover knows the Tier (MEDIUM)
+    its Attempt serves, and an Attempt without one is not counted against the spending ceiling.
+    """
+    return dataclasses.replace(
+        built,
+        request_id=action.request_id,
+        payload_retention=action.payload_retention,
+        prices=action.prices,
+        cache_key=action.cache_key,
+        no_cache=action.no_cache,
+        # Already paid once when the Tier was chosen, so every later Attempt reports the same.
+        analyzer=action.analyzer,
+        spending_ceiling=action.spending_ceiling,
+        past=tuple(past),
+        plan=plan if plan.failover is not None or plan.later else None,
+    )
+
+
 def _next_attempt(
     action: Dispatch, plan: Plan, error: PrimaGateError
 ) -> tuple[Dispatch | None, list[Attempt]]:
-    """Start the first remaining fallback that can take the request, and say which were passed.
+    """Start the next candidate that can take the request, and say which were passed.
 
-    Each candidate that cannot take the request leaves a skipped row, using the same message
-    the primary path would raise, so the two paths cannot drift apart.
+    Tier Failover comes first, then the fallbacks in order. Each candidate that cannot take the
+    request leaves a skipped row, using the same message the primary path would raise, so the
+    two paths cannot drift apart.
     """
     chain = attempt_chain(action, error)
     skipped: list[Attempt] = []
+    if plan.failover is not None:
+        rest = dataclasses.replace(plan, failover=None)
+        if isinstance(plan.failover, Dispatch):
+            medium = _carried(plan.failover, action, chain, rest)
+            return dataclasses.replace(medium, tier=Tier.MEDIUM), skipped
+        skipped.append(plan.failover)
+        plan = rest
     for index, (provider, model) in enumerate(plan.later):
         try:
             built = _build(
@@ -341,18 +398,8 @@ def _next_attempt(
                 Attempt(f"{provider}/{model}", [], skipped=reason.message or type(reason).__name__)
             )
             continue
-        rest = plan.later[index + 1 :]
-        following = dataclasses.replace(
-            built,
-            request_id=action.request_id,
-            payload_retention=action.payload_retention,
-            prices=action.prices,
-            cache_key=action.cache_key,
-            no_cache=action.no_cache,
-            past=(*chain, *skipped),
-            plan=dataclasses.replace(plan, later=rest) if rest else None,
-        )
-        return following, skipped
+        rest = dataclasses.replace(plan, later=plan.later[index + 1 :])
+        return _carried(built, action, (*chain, *skipped), rest), skipped
     return None, skipped
 
 
@@ -451,6 +498,7 @@ def start(
 
     # A stream never touches the Cache, and a call may opt out of it.
     cacheable = use_cache and not request.stream
+    routes = routing or {}
 
     def ready(first: Dispatch, request_id: str, key: str | None, read_already: bool) -> Action:
         """Make a chosen dispatch the call's own: id, price table, then the Cache, then send."""
@@ -490,6 +538,20 @@ def start(
         chosen = dict(routing.candidates)[tier]
         binding = routing.tiers.bindings[tier]
         usage = analysis.usage if analysis else None
+        failover = _tier_failover(routing, tier, chosen)
+        plan = (
+            None
+            if failover is None
+            else Plan(
+                request=request,
+                capabilities=capabilities,
+                drops=policy,
+                routing=routes,
+                retry=retry,
+                later=(),
+                failover=failover,
+            )
+        )
         # An answer from the Interim Binding is a stand-in, so it must never be replayed.
         chosen = dataclasses.replace(
             chosen,
@@ -497,6 +559,7 @@ def start(
             analyzer=usage,
             no_cache=degraded is not None,
             spending_ceiling=routing.tiers.policy.spending_ceiling,
+            plan=plan,
         )
         announced = decision_events(
             request_id,

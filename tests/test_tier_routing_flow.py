@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from primagate.core import steps
@@ -7,8 +9,9 @@ from primagate.core.policy import build_policy
 from primagate.core.profile import PREP_PROMPT_VERSION
 from primagate.core.steps import Action
 from primagate.drivers.providers import parse_tier_bindings
-from primagate.schema import events
+from primagate.schema import errors, events
 from primagate.schema.analyzer import Analysis, Verdict
+from primagate.schema.errors import PrimaGateError
 from primagate.schema.policy import TIER_ROUTING_ALIAS, TierRouting
 from primagate.schema.profile import (
     PROFILE_SCHEMA_VERSION,
@@ -297,3 +300,142 @@ def test_a_ready_call_that_degrades_still_names_its_pinned_profile(
             FP,
             "prep-1",
         )
+
+
+# --- MEDIUM-only Tier Failover ---
+
+THREE = {
+    "SMALL": {"model": "gpt-4o-mini"},
+    "MEDIUM": {"model": "gpt-4o"},
+    "POWERFUL": {"model": "gpt-4.1"},
+}
+
+
+def _three(bindings: dict[str, Any] | None = None, enabled: list[str] | None = None) -> TierRouting:
+    parsed = parse_tier_bindings(bindings or THREE)
+    names = enabled or ["SMALL", "MEDIUM", "POWERFUL"]
+    policy, _ = build_policy(
+        {
+            "enabled_tiers": names,
+            "confidence_threshold": 0.8,
+            "context_token_budget": 1000,
+            "interim_binding": names[0],
+            "ambiguous_context_default": names[0],
+            "spending_ceiling": 2.0,
+        },
+        parsed,
+    )
+    return TierRouting(policy, parsed, "gpt-4o-mini")
+
+
+def _failed_over(
+    tiers: TierRouting, verdict: str, error: PrimaGateError | None = None
+) -> tuple[steps.Dispatch, list[object]]:
+    """Route with the Analyzer saying `verdict`, fail the chosen dispatch, and return it with
+    every action core took after the failure up to the next dispatch or the end."""
+    action: Action = start(
+        ChatCompletionRequest(
+            model=TIER_ROUTING_ALIAS, messages=[Message(role="user", content="hi")]
+        ),
+        CAPS,
+        tier_routing=tiers,
+        cache_salt=b"s",
+    )
+    asked = 0
+
+    def answer(action: Action) -> steps.Outcome:
+        nonlocal asked
+        if isinstance(action, steps.NewId):
+            return steps.IdOutcome("req-1")
+        if isinstance(action, steps.CacheRead):
+            return steps.CacheReadOutcome(None)
+        if isinstance(action, steps.Emit):
+            return steps.EmitOutcome()
+        if isinstance(action, steps.Analyze):
+            asked += 1
+            return _verdict(verdict)
+        raise AssertionError(f"unexpected {type(action).__name__}")
+
+    while not isinstance(action, steps.Dispatch):
+        action = advance(action, answer(action))
+    first = action
+    failure = error or errors.ServiceUnavailableError("down", status_code=503)
+    after: list[object] = []
+    following = advance(first, steps.DispatchOutcome(error=failure))
+    while True:
+        after.append(following)
+        if isinstance(following, steps.Dispatch | steps.Raise):
+            # The Analyzer is asked once per call, never again after a failure.
+            assert asked == 1
+            return first, after
+        following = advance(following, answer(following))
+
+
+@pytest.mark.parametrize("verdict", ["SMALL 0.9", "POWERFUL 0.9"])
+def test_a_failed_tier_fails_over_to_medium_keeping_what_the_call_carries(verdict: str) -> None:
+    first, after = _failed_over(_three(), verdict)
+    medium = after[-1]
+    assert isinstance(medium, steps.Dispatch) and medium.request.model == "gpt-4o"
+    assert medium.tier is M and first.tier is not M
+    for name in (
+        "request_id",
+        "payload_retention",
+        "prices",
+        "cache_key",
+        "no_cache",
+        "analyzer",
+        "spending_ceiling",
+    ):
+        assert getattr(medium, name) == getattr(first, name), name
+    assert first.analyzer is not None and first.cache_key
+    assert [a.model for a in medium.past] == [f"openai/{first.request.model}"]
+    assert medium.plan is None and medium.retries == 0 and medium.history == ()
+    assert not any(isinstance(a, steps.Analyze) for a in after)
+
+
+def test_a_medium_choice_carries_no_failover() -> None:
+    first, after = _failed_over(_three(), "MEDIUM 0.9")
+    assert first.plan is None
+    last = after[-1]
+    assert isinstance(last, steps.Raise) and type(last.error) is errors.ServiceUnavailableError
+    assert len(last.error.attempt_chain) == 1
+
+
+def test_the_failover_is_the_filters_own_dispatch_for_medium() -> None:
+    first, _ = _failed_over(_three(), "SMALL 0.9")
+    assert first.plan is not None and first.plan.later == ()
+    medium = first.plan.failover
+    assert isinstance(medium, steps.Dispatch) and medium.request.model == "gpt-4o"
+
+
+@pytest.mark.parametrize(
+    ("bindings", "enabled", "reason"),
+    [
+        (THREE, ["SMALL", "POWERFUL"], "MEDIUM is not in enabled_tiers"),
+        ({**THREE, "MEDIUM": {"model": "gpt-4o-mini"}}, None, "same model as the resolved Tier"),
+    ],
+)
+def test_a_medium_that_cannot_run_is_a_skipped_row(
+    bindings: dict[str, Any], enabled: list[str] | None, reason: str
+) -> None:
+    _, after = _failed_over(_three(bindings, enabled), "SMALL 0.9")
+    last = after[-1]
+    assert isinstance(last, steps.Raise)
+    assert isinstance(last.error, errors.AttemptsExhaustedError)
+    tried, passed = last.error.attempt_chain
+    assert tried.skipped is None and passed.skipped == reason and passed.dispatches == []
+    skips = [
+        e
+        for a in after
+        if isinstance(a, steps.Emit)
+        for e in a.events
+        if isinstance(e, events.AttemptSkipped)
+    ]
+    assert [(e.model, e.reason) for e in skips] == [(passed.model, reason)]
+
+
+def test_a_raise_class_error_on_the_resolved_tier_ends_the_call() -> None:
+    _, after = _failed_over(_three(), "SMALL 0.9", errors.BadRequestError("bad"))
+    last = after[-1]
+    assert isinstance(last, steps.Raise) and type(last.error) is errors.BadRequestError
+    assert len(last.error.attempt_chain) == 1

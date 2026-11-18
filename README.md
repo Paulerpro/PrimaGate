@@ -142,20 +142,37 @@ fallback models (`fallbacks`, `default_fallbacks`), PrimaGate uses these classes
 comes next: temporary errors are retried and then moved on, errors of the second kind move on
 to the next endpoint or fallback, and errors of the third kind stop at once.
 
+A Tier Routing call (step 16) has one more step. When the Tier that was chosen is SMALL or
+POWERFUL and its model still fails after its retries and redundant endpoints, PrimaGate tries the
+MEDIUM Tier once, as one more attempt with its own retries and redundant endpoints. Only MEDIUM is
+tried, never another Tier, and never more than once. A call that chose MEDIUM, and a plain call,
+have no such step. Errors of the third kind on the chosen Tier stop the call at once, as always.
+
 Every response and every error records what happened in `attempt_chain`: one row per model that
 was tried, in order, each listing its dispatches (the `endpoint`, the number of `retries` and the
-`error` it ended with). A row with `skipped` set is a fallback that was passed over without being
-sent, because it could not do what the request needs; `skipped` holds the reason, and such a row
-is not an attempt.
+`error` it ended with). A row with `skipped` set is a fallback, or the MEDIUM Tier of a Tier
+Routing call, that was passed over without being sent; `skipped` holds the reason, and such a row
+is not an attempt. A fallback is passed over when it cannot do what the request needs. MEDIUM is
+passed over when it is not in `enabled_tiers` (`MEDIUM is not in enabled_tiers`), when it cannot
+take the request (the same reason routing gives for removing it), or when it is bound to the
+model that just failed (`same model as the resolved Tier`), so no model is run twice.
 
-When more than one model was tried, or a failed attempt was followed only by fallbacks that were
+When more than one model was tried, or a failed attempt was followed only by candidates that were
 passed over, PrimaGate raises one `AttemptsExhaustedError` instead of only the last error.
 `error.attempts` lists the models that were really tried, `error.attempt_chain` also shows the
 ones passed over, and `error.last_error` is the error that ended the chain. A single model that
-fails raises its own error, with `attempt_chain` attached. `AttemptsExhaustedError` copies
-`status_code` and `llm_provider` from `last_error`. If you caught a specific error such as
-`RateLimitError` around a call that has fallbacks, catch `AttemptsExhaustedError` as well and
-look at `error.last_error`.
+fails with nothing passed over raises its own error, with `attempt_chain` attached.
+`AttemptsExhaustedError` copies `status_code` and `llm_provider` from `last_error`. If you caught
+a specific error such as `RateLimitError` around a call that has fallbacks, catch
+`AttemptsExhaustedError` as well and look at `error.last_error`.
+
+The same holds for a Tier Routing call whose chosen Tier is SMALL or POWERFUL. When that Tier
+fails with an error of the first or second kind, the call raises `AttemptsExhaustedError` even if
+MEDIUM was passed over and nothing else was sent, because the passed-over MEDIUM is a row of its
+own; `error.last_error` is then the chosen Tier's original error. Catch `AttemptsExhaustedError`
+around routed calls too. An error of the third kind is raised as itself, as before. If MEDIUM
+itself then fails with an error of the third kind, that error ends the chain at once and, since
+two models were tried, it arrives as the `last_error` of an `AttemptsExhaustedError`.
 
 ```python
 from primagate import AttemptsExhaustedError, PrimaGateError, completion
@@ -212,7 +229,7 @@ All the events of one call share a `request_id` (it starts with `req-`), and eac
 - `dispatch_failed`: it failed; `next` says what follows: `retry`, `next_endpoint`,
   `next_attempt` or `raise`.
 - `retry_scheduled`: PrimaGate will wait `delay` seconds and try again.
-- `attempt_skipped`: a fallback was passed over, with the `reason`.
+- `attempt_skipped`: a fallback, or the MEDIUM Tier Failover, was passed over, with the `reason`.
 - `cache_hit`: the call was answered from memory and nothing was sent (see step 12). It is the
   only event of such a call.
 - `cost_unknown`: the model that answered has no price, so there is no cost Estimate (see step 10).
@@ -741,17 +758,35 @@ When routing cannot choose, your request is not failed. If the Analyzer is unrea
 out, answers in the wrong shape, names a Tier that cannot take the request, the latest turn is
 larger than `context_token_budget`, the Analyzer cap is reached, or your declared sources have no
 prepared Profile yet (step 18), the call goes to your `interim_binding` Tier instead. That is one
-dispatch to a worker model, with no second Analyzer request (retries and provider routing for that
-model still apply as for any call), and a `routing_degraded` event (step 13) says why with one of
-these reasons: `provider_error`, `malformed_output`, `tier_not_enabled`, `no_conversation`,
-`over_budget`, `over_capacity` (the cap in step 15 was reached), `no_analyzer` (no Analyzer is
-set), `analyzer_unavailable` (no adapter is registered for the Analyzer's provider), `preparing`
-(the Profile was still being prepared when the call started) or `preparation_failed` (preparing it
-failed, step 18). If the `interim_binding` Tier cannot take the request, the nearest Tier that can
-is used, stronger ones first. Because the Interim Tier may sit above the cheapest able
-one, `premium_routing_selected` can follow `routing_degraded` for the same call. An answer given
+attempt on a worker model, with no second Analyzer request (retries, provider routing and Tier
+Failover still apply as for any routed call), and a `routing_degraded` event (step 13) says why
+with one of these reasons: `provider_error`, `malformed_output`, `tier_not_enabled`,
+`no_conversation`, `over_budget`, `over_capacity` (the cap in step 15 was reached), `no_analyzer`
+(no Analyzer is set), `analyzer_unavailable` (no adapter is registered for the Analyzer's
+provider), `preparing` (the Profile was still being prepared when the call started) or
+`preparation_failed` (preparing it failed, step 18). If the `interim_binding` Tier cannot take
+the request, the nearest Tier that can is used, stronger ones first. Because the Interim Tier may
+sit above the cheapest able one, `premium_routing_selected` can follow `routing_degraded` for the
+same call. An answer given
 this way is never stored in the cache (step 12), so the next identical call asks the Analyzer
 again.
+
+If the Tier that was chosen is SMALL or POWERFUL and its model fails after its retries and
+redundant endpoints, the call is not lost: PrimaGate tries MEDIUM once, as step 7 describes.
+This is Tier Failover. It never asks the Analyzer again and never re-runs routing: MEDIUM is sent
+exactly as routing prepared it for this request, with its own `limits` and dropped parameters. The
+response's `metadata.tier` then says `MEDIUM`, `metadata.analyzer` still shows the one Analyzer
+request, and the spending ceiling (step 15) counts MEDIUM's answer plus that one Analyzer cost.
+The answer is cached like any routed answer, unless the call had gone to the Interim Binding. If
+MEDIUM is not enabled, cannot take the request, or is bound to the model that failed, it is passed
+over with a `skipped` row in `attempt_chain` and an `attempt_skipped` event. That row names
+MEDIUM's model, or just `MEDIUM` when you declared no MEDIUM binding at all, since there is no
+provider or model to name. When MEDIUM was the chosen Tier, there is no failover.
+
+The decision events (`routing_decision` and the others in step 13) keep the Tier routing chose;
+only `metadata.tier` moves to the Tier that answered. The move itself shows as a `dispatch_failed`
+event whose `next` is `next_attempt`, the same value a move to a fallback uses, followed by a
+`dispatch_started` for MEDIUM's model.
 
 A fallback list is not applied to alias calls yet. The alias cannot be used in a fallback list.
 
