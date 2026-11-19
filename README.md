@@ -568,7 +568,7 @@ starts, so do not store it.
 
 Tier Routing (step 16) sends each request to the cheapest of three
 Tiers that can do the job: `SMALL`, `MEDIUM` and `POWERFUL`, in that order of strength. You can
-already say which model plays each Tier, how to call it, what it can do and what it costs. Only
+say which model plays each Tier, how to call it, what it can do and what it costs. Only
 those three labels are accepted, exactly as written.
 
 ```python
@@ -586,6 +586,7 @@ gate = PrimaGate(
     }
 )
 
+# A direct call to a model, like this one, gets none of the SMALL binding's settings.
 response = gate.completion(
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Say hello in five words."}],
@@ -607,9 +608,22 @@ A fact the provider does not publish, such as a context window or a price you le
 stored as the single value `UNKNOWN` and is never left out or replaced by `None`. You can also
 write the string `"unknown"` to say so on purpose.
 
-Declaring a binding is only a declaration for now. Its `settings` and `limits` are stored and
-checked but not applied to any call, and ordinary calls behave as before, with one exception: a
-price in a binding is used for cost estimates (step 10) for that model, after any
+When Tier Routing (step 16) sends a call to a Tier, the binding's `settings` fill in whatever the
+request leaves unset. A value you pass on the call itself always wins, so you can override a
+setting per request. Passing `None` means "use the binding", so a call can override a binding's
+setting but cannot remove it. Calls that name a model directly, like the example above, and the
+fallbacks a routed call moves on to get none of a binding's settings.
+
+Setup refuses settings that could never work, whatever `drop_params` says: a setting the bound
+provider cannot honour, such as `seed` on Anthropic, and a `max_tokens` above the binding's known
+`limits.max_output_tokens`. It also refuses enabled Tiers that bind the same model with
+different settings. Tiers may share a model when their settings match.
+
+In `limits`, `supported_features` narrows which Tiers can take a request: a Tier whose list leaves
+out a feature the request needs is passed over, while an unknown list narrows nothing.
+`context_window` and `max_output_tokens` are recorded but not enforced on calls.
+
+A price in a binding is used for cost estimates (step 10) for that model, after any
 `price_overrides` you pass and before the bundled table. A price needs both `input` and `output`
 to count, and one model may not be given two different prices.
 

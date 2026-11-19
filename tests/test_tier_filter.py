@@ -196,3 +196,11 @@ def test_narrowing_keeps_what_the_adapter_has_and_never_adds() -> None:
 def test_unknown_limits_leave_each_feature_as_the_adapter_declares_it(name: str) -> None:
     bound = parse_tier_bindings({"SMALL": {"model": "gpt-4o"}})
     assert getattr(core_tiers.narrowed(OPENAI_CAPS, bound[Tier.SMALL]), name) is True
+
+
+def test_a_bindings_stored_stop_tuple_reaches_the_request_as_a_list() -> None:
+    routing = _routing({"SMALL": {"model": "gpt-4o", "settings": {"stop": ["END"]}}})
+    assert routing.bindings[Tier.SMALL].settings["stop"] == ("END",)
+    sent = _single(_first(_request(), routing)).request.stop
+    # The wire body cannot tell a tuple from a list, so the type is checked here.
+    assert type(sent) is list and sent == ["END"]

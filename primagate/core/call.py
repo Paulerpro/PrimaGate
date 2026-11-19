@@ -206,6 +206,22 @@ def _build(
     )
 
 
+def _with_settings(
+    request: ChatCompletionRequest, settings: Mapping[str, Any]
+) -> ChatCompletionRequest:
+    """`request` with a binding's settings filled in only where the Caller left a field unset.
+
+    The Caller's own value always wins, so a per-request override needs no extra syntax.
+    """
+    filled: dict[str, Any] = {
+        # A binding stores `stop` as a tuple so it cannot be changed; the request takes a list.
+        name: list(value) if isinstance(value, tuple) else value
+        for name, value in settings.items()
+        if getattr(request, name) is None
+    }
+    return dataclasses.replace(request, **filled) if filled else request
+
+
 @dataclasses.dataclass(frozen=True)
 class Routing:
     """The Tiers that can take a request, each with the dispatch that would serve it."""
@@ -230,7 +246,9 @@ def _route_tier(
 
     Each enabled Tier goes through `_build`, the check the plain path and the Fallback List use
     too, with the adapter's capabilities narrowed by that Tier's binding, so all three agree on
-    what a model can do and on dropping before filtering.
+    what a model can do and on dropping before filtering. Each Tier's request carries that
+    binding's settings, so whatever reuses a dispatch built here, Tier Failover included, sends
+    the settings of the Tier it serves.
     """
     if tiers is None:
         raise BadRequestError(
@@ -252,8 +270,11 @@ def _route_tier(
                 provider: narrowed(declared, binding),
             }
         )
+        # Filled in before `_build`, so a binding's setting meets the same drop and
+        # unsupported-parameter rules as one the Caller sent.
+        asked = _with_settings(request, binding.settings)
         try:
-            built = _build(request, provider, model, seen_by_tier, drops, routes, retry)
+            built = _build(asked, provider, model, seen_by_tier, drops, routes, retry)
             able.append((tier, built))
         except UnsupportedParamsError as reason:
             # Only a missing feature means "this Tier cannot take it"; anything else is a fault
@@ -714,7 +735,8 @@ def start(
 
     def begin_routed(request_id: str) -> Action:
         # A hit returns before the Tier is chosen, so it never depends on the filter or on the
-        # Analyzer. Anything a past answer was cached for would pass the filter again.
+        # Analyzer. Anything a past answer was cached for would pass the filter again. Binding
+        # settings stay out of the key: they are fixed for the instance, like the bindings.
         key = cache_key(request, policy, cache_salt)
         if key is None:
             return begin(request_id)

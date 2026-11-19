@@ -247,10 +247,29 @@ def parse_policy(value: object, bindings: Mapping[Tier, TierBinding]) -> Policy 
     if value is None:
         return None
     policy, advisories = core_policy.build_policy(value, bindings)
+    _one_setting_per_model(policy, bindings)
     for advice in advisories:
         # Setup has no request to hang an event on, so the advisory goes to the logger.
         logger.warning(advice)
     return policy
+
+
+def _one_setting_per_model(policy: Policy, bindings: Mapping[Tier, TierBinding]) -> None:
+    """Refuse enabled Tiers that bind one model with different settings.
+
+    Routing keeps one candidate per model, so the second Tier's settings would be silently lost.
+    """
+    first: dict[tuple[str, str], TierBinding] = {}
+    for tier in policy.enabled_tiers:
+        binding = bindings[tier]
+        model = (binding.provider, binding.model_id)
+        earlier = first.setdefault(model, binding)
+        if earlier is not binding and dict(earlier.settings) != dict(binding.settings):
+            raise BadRequestError(
+                f"tier_bindings {earlier.tier.name} and {tier.name} bind "
+                f"{binding.provider}/{binding.model_id} with different settings; enabled Tiers "
+                "on one model must share its settings"
+            )
 
 
 _BINDING_FIELDS = frozenset({"model", "settings", "limits", "pricing"})
@@ -356,9 +375,30 @@ def parse_tier_bindings(value: object) -> dict[Tier, TierBinding]:
         # Exact upper-case words only: a near miss such as "small" is a mistake to surface.
         if not isinstance(label, str) or label not in Tier.__members__:
             raise BadRequestError("tier_bindings labels must be SMALL, MEDIUM or POWERFUL")
-        parsed[Tier[label]] = _binding(label, raw)
+        parsed[Tier[label]] = _honourable(_binding(label, raw))
     core_tiers.binding_prices(parsed.values())
     return parsed
+
+
+def _honourable(binding: TierBinding) -> TierBinding:
+    """Refuse a setting the bound model can never take, whatever `drop_params` says.
+
+    The setting is the developer's own configuration and is known to be impossible now, so it
+    fails here rather than on whichever call the Analyzer happens to route to this Tier.
+    """
+    where = f"tier_bindings {binding.tier.name}"
+    spec = BUILTIN_PROVIDERS.get(binding.provider)
+    hints = spec.adapter().capabilities().unsupported_hints if spec else frozenset()
+    for name in binding.settings:
+        if name in hints:
+            raise BadRequestError(
+                f"{where}: settings.{name} is not supported by {binding.provider}"
+            )
+    ceiling = binding.limits.max_output_tokens
+    tokens = binding.settings.get("max_tokens")
+    if tokens is not None and isinstance(ceiling, int) and tokens > ceiling:
+        raise BadRequestError(f"{where}: settings.max_tokens is above limits.max_output_tokens")
+    return binding
 
 
 def _binding(label: str, raw: object) -> TierBinding:

@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import pickle
 from typing import Any
 
@@ -8,8 +9,10 @@ import primagate
 from primagate import PrimaGate
 from primagate.core import tiers as core_tiers
 from primagate.core.prices import Price
+from primagate.drivers import providers
 from primagate.schema import errors
 from primagate.schema.tiers import UNKNOWN, Tier, TierBinding, Unknown
+from primagate.schema.types import ChatCompletionRequest
 from primagate.schema.wire import Capabilities
 
 FULL: dict[str, Any] = {
@@ -266,3 +269,9 @@ def test_binding_limits_win_over_the_registry_and_the_registry_fills_a_gap() -> 
     assert won == frozenset({"streaming", "images"})
     assert core_tiers.effective_features(ADAPTER, _binding(), registry) == registry
     assert core_tiers.effective_features(ADAPTER, None, registry) == registry
+
+
+def test_every_binding_setting_is_a_field_of_the_request_it_fills() -> None:
+    # Routing fills a request field of the same name, so a setting with no field would break it.
+    fields = {f.name for f in dataclasses.fields(ChatCompletionRequest)}
+    assert providers._SETTING_FIELDS <= fields

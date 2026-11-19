@@ -275,7 +275,8 @@ def test_readme_explains_tier_bindings() -> None:
         "Tier Routing (step 16) sends",
         "price_overrides",
         "per million tokens",
-        "not applied to any call",
+        "request leaves unset",
+        "recorded but not enforced",
         "supported_features",
     ):
         assert phrase in README, phrase
