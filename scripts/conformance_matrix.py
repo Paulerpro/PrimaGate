@@ -1,5 +1,8 @@
 """Build the FR-to-test conformance matrix and check the suite against FR41.
 
+The matrix also has a live column: for each FR, the tests in tests/live/ that check it against
+real providers, or, for a required FR with none, why it is proven against recorded replies only.
+
 Run `uv run python scripts/conformance_matrix.py` to rewrite docs/conformance-matrix.md.
 tests/conformance/test_coverage_audit.py imports this file to apply the same checks.
 """
@@ -21,6 +24,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "tests" / "conformance"
+LIVE_SUITE = ROOT / "tests" / "live"
 MATRIX = ROOT / "docs" / "conformance-matrix.md"
 REGENERATE = "uv run python scripts/conformance_matrix.py"
 
@@ -76,6 +80,22 @@ LAST_FR = max(FR_TITLES)
 # The FRs that FR41 says must each have at least one passing conformance test.
 REQUIRED: frozenset[int] = frozenset([1, 2, *range(4, 15), 16, 20, 21, 22, 25, 27, *range(30, 39)])
 
+# Required FRs with no live test, each with why. A real provider cannot be made to fail, time out
+# or be cancelled on cue, and some FRs are settled at setup before any request is sent.
+RECORDED_ONLY: dict[int, str] = {
+    7: "fallbacks run only after the primary fails, and a real provider cannot fail on cue",
+    8: "running without a Fallback List is setup behaviour with nothing provider-specific",
+    9: "the retries and redundant endpoints of each entry need forced 5xx and timeout failures",
+    10: "a fallback is skipped only after the primary fails, which cannot be forced live",
+    11: "the aggregate error needs every Attempt to fail, which cannot be forced live",
+    12: "a retry needs a forced 5xx, 429 or timeout, which a real provider gives only by chance",
+    14: "redundant endpoints are validated at setup, before any request is sent",
+    16: "Tier Bindings are validated at setup, before any request is sent",
+    25: "eligibility is decided from declared capabilities before any request is sent",
+    27: "cancelling at an exact point of a real call is not reproducible",
+    30: "Tier Failover needs the resolved Tier's model to fail with a retry-able error on cue",
+}
+
 MODES = frozenset({"sync", "async"})
 # The parameters through which the suite really runs a test in sync or async mode. An id that
 # merely reads "sync" or "async" proves nothing, so ids are never consulted.
@@ -95,6 +115,8 @@ class Item:
     modes: tuple[str, ...] = ()
     # Its other parameters, so the sync and async halves of one variant can be paired.
     variant: tuple[str, ...] = ()
+    # Whether it carries the `live` marker, which keeps it out of the default run.
+    live: bool = False
 
 
 @dataclass
@@ -190,6 +212,28 @@ def mode_violations(tests: Iterable[SuiteTest]) -> list[str]:
     return found
 
 
+def live_problems(live: Iterable[SuiteTest]) -> list[str]:
+    """What is wrong with the live suite's coverage; a recorded-only FR with a reason is fine."""
+    live = list(live)
+    covered = set().union(*(t.frs for t in live))
+    found = [
+        f"{t.nodeid}: no live marker, so the default run would call a real provider"
+        for t in live
+        if not all(i.live for i in t.items)
+    ]
+    for number in sorted(REQUIRED):
+        reason = RECORDED_ONLY.get(number, "")
+        if number not in covered and not reason.strip():
+            found.append(f"FR{number} has no live test and no recorded-only reason")
+        if number in covered and number in RECORDED_ONLY:
+            found.append(f"FR{number} has a live test but is still listed as recorded only")
+    found += [
+        f"FR{n} is listed as recorded only but FR41 does not require it"
+        for n in sorted(set(RECORDED_ONLY) - REQUIRED)
+    ]
+    return found
+
+
 def _names_by_module(tests: Iterable[SuiteTest]) -> dict[str, list[str]]:
     modules: dict[str, list[str]] = defaultdict(list)
     for test in sorted(tests, key=lambda t: t.nodeid):
@@ -197,13 +241,35 @@ def _names_by_module(tests: Iterable[SuiteTest]) -> dict[str, list[str]]:
     return dict(sorted(modules.items()))
 
 
-def render(tests: Iterable[SuiteTest]) -> str:
-    tests = list(tests)
+def _by_fr(tests: Iterable[SuiteTest]) -> dict[int, list[SuiteTest]]:
     by_fr: dict[int, list[SuiteTest]] = defaultdict(list)
     for test in tests:
         for number in test.frs:
             by_fr[number].append(test)
+    return by_fr
+
+
+def _cell(tests: list[SuiteTest]) -> str:
+    return "<br>".join(
+        f"`{module}`: " + ", ".join(f"`{name}`" for name in names)
+        for module, names in _names_by_module(tests).items()
+    )
+
+
+def _live_cell(number: int, tests: list[SuiteTest]) -> str:
+    if tests:
+        return _cell(tests)
+    if number in REQUIRED:
+        return f"recorded only: {RECORDED_ONLY.get(number) or 'no reason given'}"
+    return "none"
+
+
+def render(tests: Iterable[SuiteTest], live: Iterable[SuiteTest] = ()) -> str:
+    tests = list(tests)
+    by_fr = _by_fr(tests)
+    live_by_fr = _by_fr(live)
     covered = sum(1 for n in REQUIRED if by_fr.get(n))
+    live_covered = sum(1 for n in REQUIRED if live_by_fr.get(n))
     lines = [
         "# Conformance matrix",
         "",
@@ -224,19 +290,26 @@ def render(tests: Iterable[SuiteTest]) -> str:
         "A test counts once, however many parametrized variants it has. A tag means the test",
         "asserts that FR's behaviour, not merely that it runs the code.",
         "",
-        f"Required FRs covered: {covered} of {len(REQUIRED)}.",
+        "The Live column lists the tests in `tests/live/` that check the FR against real OpenAI",
+        "and Anthropic replies (`uv run pytest -m live`, see `docs/live-conformance.md`). A",
+        "required FR with no live test says why it is proven against recorded replies only. That",
+        "is not a failure.",
         "",
-        "| FR | Title | Required | Tests | Tests by module |",
-        "|---|---|---|---|---|",
+        f"Required FRs covered: {covered} of {len(REQUIRED)}.",
+        f"Required FRs with a live test: {live_covered} of {len(REQUIRED)}; the rest are "
+        "recorded only.",
+        "",
+        "| FR | Title | Required | Tests | Tests by module | Live |",
+        "|---|---|---|---|---|---|",
     ]
     for number, title in FR_TITLES.items():
         tagged = by_fr.get(number, [])
-        cell = "<br>".join(
-            f"`{module}`: " + ", ".join(f"`{name}`" for name in names)
-            for module, names in _names_by_module(tagged).items()
-        )
+        cell = _cell(tagged) or "none"
         required = "yes" if number in REQUIRED else "no"
-        lines.append(f"| FR{number} | {title} | {required} | {len(tagged)} | {cell or 'none'} |")
+        live_cell = _live_cell(number, live_by_fr.get(number, []))
+        lines.append(
+            f"| FR{number} | {title} | {required} | {len(tagged)} | {cell} | {live_cell} |"
+        )
     untagged = _names_by_module(t for t in tests if not t.frs)
     lines += [
         "",
@@ -278,7 +351,8 @@ class _Collector:
             modes = tuple(sorted({v for k, v in params.items() if k in MODE_PARAMS and v in MODES}))
             # Indices number the whole product, so the values pair the two halves instead.
             variant = tuple(f"{k}={v!r}" for k, v in sorted(params.items()) if k not in MODE_PARAMS)
-            self.items.append(Item(item.nodeid, tags, reasons, modes, variant))
+            live = item.get_closest_marker("live") is not None
+            self.items.append(Item(item.nodeid, tags, reasons, modes, variant, live))
 
 
 def collect(suite: Path = SUITE) -> list[SuiteTest]:
@@ -294,6 +368,9 @@ def collect(suite: Path = SUITE) -> list[SuiteTest]:
         str(ROOT),
         "-c",
         str(ROOT / "pyproject.toml"),
+        # The configured `-m 'not live'` would hide the live suite from the audit.
+        "-m",
+        "",
         str(suite),
     ]
     # The caller's own options must not change what is collected.
@@ -313,12 +390,15 @@ def collect(suite: Path = SUITE) -> list[SuiteTest]:
     return group(collector.items)
 
 
-def main(suite: Path = SUITE, matrix: Path = MATRIX) -> int:
+def main(suite: Path = SUITE, matrix: Path = MATRIX, live_suite: Path = LIVE_SUITE) -> int:
     tests = collect(suite)
-    matrix.write_text(render(tests), encoding="utf-8", newline="\n")
+    live = collect(live_suite)
+    matrix.write_text(render(tests, live), encoding="utf-8", newline="\n")
     problems = (
         missing_required(tests) + unknown_tags(tests) + partial_tags(tests) + mode_violations(tests)
     )
+    problems += unknown_tags(live) + partial_tags(live) + mode_violations(live)
+    problems += live_problems(live)
     print(f"wrote {matrix}")
     for problem in problems:
         print(f"problem: {problem}", file=sys.stderr)

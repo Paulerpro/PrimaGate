@@ -16,6 +16,9 @@ dist/
 .env
 *.egg-info/
 
+# Written by `uv run pytest -m live`; uploaded as a CI artifact, never committed
+live-report.md
+
 # Spike reports are measurements, not artifacts to commit
 evals/results/*
 !evals/results/.gitkeep

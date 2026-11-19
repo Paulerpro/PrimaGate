@@ -42,7 +42,10 @@ packages = ["primagate"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Live tests call real providers and cost money, so only `uv run pytest -m live` runs them.
+addopts = "-m 'not live'"
 markers = [
+    "live: calls a real provider; deselected unless run with `-m live` (docs/live-conformance.md)",
     "fr(*ids): the FRs this conformance test proves, for example fr(\"FR7\")",
     "mode_independent(reason): this conformance test is not parametrized over sync and async mode; the reason says why",
 ]

@@ -94,6 +94,14 @@ unknown FR, or if a test breaks the sync and async rule.
 `FR_TITLES` and `REQUIRED` in `scripts/conformance_matrix.py` mirror the FR headings in the PRD and
 the FRs that FR-41 requires. When the PRD changes, change them with it.
 
+### Live conformance
+
+The tests in `tests/live/` call the real OpenAI and Anthropic APIs. They carry the `live` marker,
+so `uv run pytest` leaves them out and needs no key. Run them with `uv run pytest -m live`. Read
+[docs/live-conformance.md](docs/live-conformance.md) for the keys, the cost and how to read the
+report. A live test is tagged with FRs like a conformance test, runs in both modes through the
+`call` fixture, and keeps every request at 50 output tokens or fewer.
+
 ## Versioning
 
 Read [docs/versioning.md](docs/versioning.md) before you change anything a user can import from

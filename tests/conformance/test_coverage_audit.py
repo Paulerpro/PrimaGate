@@ -37,6 +37,11 @@ def suite() -> list[Any]:
     return list(cm.collect())
 
 
+@pytest.fixture(scope="module")
+def live_suite() -> list[Any]:
+    return list(cm.collect(cm.LIVE_SUITE))
+
+
 def _both(name: str, *tags: object, variant: tuple[str, ...] = ()) -> list[Any]:
     suffix = "-".join(variant)
     return [
@@ -73,10 +78,35 @@ def test_every_test_runs_in_both_modes_or_says_why_not(suite: list[Any]) -> None
     assert not broken, "tests breaking the mode rule:\n" + "\n".join(broken)
 
 
-def test_the_committed_matrix_is_current(suite: list[Any]) -> None:
+def test_the_committed_matrix_is_current(suite: list[Any], live_suite: list[Any]) -> None:
     committed = cm.MATRIX.read_text(encoding="utf-8") if cm.MATRIX.exists() else None
-    problem = cm.stale_message(committed, cm.render(suite))
+    problem = cm.stale_message(committed, cm.render(suite, live_suite))
     assert problem is None, problem
+
+
+# --- the real live suite ---
+
+# The FRs the live suite checks against real providers: every required one not recorded only.
+LIVE_FRS = cm.REQUIRED - set(cm.RECORDED_ONLY)
+
+
+def test_every_required_fr_has_a_live_test_or_a_recorded_only_reason(
+    live_suite: list[Any],
+) -> None:
+    problems = cm.live_problems(live_suite)
+    assert not problems, "live coverage problems:\n" + "\n".join(problems)
+
+
+def test_live_tests_follow_the_tag_and_mode_rules(live_suite: list[Any]) -> None:
+    wrong = (
+        cm.unknown_tags(live_suite) + cm.partial_tags(live_suite) + cm.mode_violations(live_suite)
+    )
+    assert not wrong, "live tests breaking the suite rules:\n" + "\n".join(wrong)
+
+
+def test_the_live_suite_checks_the_frs_chosen_for_it(live_suite: list[Any]) -> None:
+    assert set().union(*(t.frs for t in live_suite)) == LIVE_FRS
+    assert all(item.live for test in live_suite for item in test.items)
 
 
 def test_the_collection_matches_the_committed_matrix_counts(suite: list[Any]) -> None:
@@ -192,6 +222,22 @@ def test_main_exits_1_with_its_problems_and_0_on_a_sound_suite(
     assert "Required FRs covered: 28 of 28." in matrix.read_text(encoding="utf-8")
 
 
+def test_main_exits_1_on_a_broken_live_suite(
+    mini: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tags = ", ".join(f'"FR{n}"' for n in sorted(cm.REQUIRED))
+    sound = MINI_HEAD + f"\n    @pytest.mark.fr({tags})\n    def test_all(call):\n        pass\n"
+    # Tagged with every live FR, but without the live marker the default run would spend.
+    live_tags = ", ".join(f'"FR{n}"' for n in sorted(LIVE_FRS))
+    unmarked = (
+        MINI_HEAD + f"\n    @pytest.mark.fr({live_tags})\n    def test_x(call):\n        pass\n"
+    )
+    assert cm.main(mini(sound), tmp_path / "matrix.md", mini(unmarked)) == 1
+    problems = [line for line in capsys.readouterr().err.splitlines() if line]
+    assert problems and all(line.startswith("problem: ") for line in problems)
+    assert any("no live marker" in line for line in problems)
+
+
 def test_the_callers_pytest_options_do_not_change_the_collection(
     mini: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -282,6 +328,55 @@ def test_the_matrix_is_the_same_whatever_order_tests_are_collected_in() -> None:
     assert cm.render(cm.group(items)) == cm.render(cm.group(shuffled))
 
 
+def test_a_live_test_without_the_marker_is_named() -> None:
+    marked = [cm.Item(f"{X}::test_a[{m}]", ("FR1",), None, (m,), (), True) for m in cm.MODES]
+    bare = [cm.Item(f"{X}::test_b[{m}]", ("FR1",), None, (m,), (), m == "sync") for m in cm.MODES]
+    problems = cm.live_problems(cm.group(marked + bare))
+    assert [p for p in problems if "marker" in p] == [
+        f"{X}::test_b: no live marker, so the default run would call a real provider"
+    ]
+
+
+def test_live_coverage_needs_a_test_or_a_reason_and_never_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def live(*numbers: int) -> list[Any]:
+        return cm.group(
+            cm.Item(f"{X}::test_fr{n}[{m}]", (f"FR{n}",), None, (m,), (), True)
+            for n in numbers
+            for m in cm.MODES
+        )
+
+    chosen = sorted(LIVE_FRS)
+    assert cm.live_problems(live(*chosen)) == []
+    assert cm.live_problems(live(*chosen[1:])) == [
+        "FR1 has no live test and no recorded-only reason"
+    ]
+    assert cm.live_problems(live(*chosen, 12)) == [
+        "FR12 has a live test but is still listed as recorded only"
+    ]
+    monkeypatch.setitem(cm.RECORDED_ONLY, 7, "  ")
+    monkeypatch.setitem(cm.RECORDED_ONLY, 3, "not required")
+    assert cm.live_problems(live(*chosen)) == [
+        "FR7 has no live test and no recorded-only reason",
+        "FR3 is listed as recorded only but FR41 does not require it",
+    ]
+
+
+def test_the_live_column_lists_live_tests_or_says_why_not() -> None:
+    live = [
+        cm.Item(f"tests/live/test_l.py::test_live[{m}]", ("FR7",), None, (m,), (), True)
+        for m in cm.MODES
+    ]
+    rows = _rows(cm.render(cm.group(_covering_everything()), cm.group(live)))
+    assert rows[6][5] == "`tests/live/test_l.py`: `test_live` |"
+    assert rows[11][5] == f"recorded only: {cm.RECORDED_ONLY[12]} |"
+    assert rows[2][5] == "none |"
+    header = cm.render(cm.group(_covering_everything()), cm.group(live))
+    assert "| FR | Title | Required | Tests | Tests by module | Live |" in header
+    assert "Required FRs with a live test: 1 of 28" in header
+
+
 def test_the_matrix_has_one_row_per_fr_with_its_tests_by_module() -> None:
     items = [
         *_both("test_b", "FR7"),
@@ -292,8 +387,8 @@ def test_the_matrix_has_one_row_per_fr_with_its_tests_by_module() -> None:
     rows = _rows(cm.render(cm.group(items)))
     assert [r[0] for r in rows] == [f"| FR{n}" for n in range(1, 45)]
     assert rows[6][2:4] == ["yes", "3"]
-    assert rows[6][4] == (f"`{X}`: `test_a`, `test_b`<br>`tests/conformance/test_y.py`: `test_c` |")
-    assert rows[2][2:5] == ["no", "0", "none |"]
+    assert rows[6][4] == (f"`{X}`: `test_a`, `test_b`<br>`tests/conformance/test_y.py`: `test_c`")
+    assert rows[2][2:6] == ["no", "0", "none", "none |"]
 
 
 def test_untagged_tests_are_listed_by_module() -> None:

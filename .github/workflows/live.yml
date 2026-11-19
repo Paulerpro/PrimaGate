@@ -1,0 +1,60 @@
+name: Live conformance
+
+# Real calls to OpenAI and Anthropic with spend-limited keys. Never part of pull-request CI.
+# Scheduled and manual runs require no provider, so a missing key shows as skipped in the report.
+# The release workflow (Story 8.6) is meant to call this as its gate, where every provider is
+# required and a missing key fails the run. docs/live-conformance.md
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      require:
+        description: Providers whose tests must run; a missing key then fails the run.
+        type: string
+        default: openai,anthropic
+    secrets:
+      # Not marked required, so a missing secret still runs the suite, which then fails and
+      # names the missing key in the report instead of the call being refused without one.
+      OPENAI_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One live run at a time, so two runs never spend in parallel; a queued run waits.
+    concurrency:
+      group: primagate-live-conformance
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+      # --locked fails when uv.lock is stale relative to pyproject.toml.
+      - run: uv sync --locked
+      - name: Run the live suite
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Only a workflow_call has inputs, so scheduled and manual runs require nothing.
+          PRIMAGATE_LIVE_REQUIRE: ${{ inputs.require }}
+          PRIMAGATE_LIVE_REPORT: live-report.md
+        run: uv run pytest -m live
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-report
+          path: live-report.md
+          if-no-files-found: warn
+          retention-days: 30
