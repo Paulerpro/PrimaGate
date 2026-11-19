@@ -53,7 +53,9 @@ jobs:
           from importlib.metadata import requires
           import primagate
           assert primagate.__version__
-          assert requires('primagate') == ['httpx2<3,>=2.13'], requires('primagate')
+          # Only what a plain install pulls in; optional extras such as tokens are not counted.
+          base = [r for r in requires('primagate') if 'extra ==' not in r]
+          assert base == ['httpx2<3,>=2.13', 'typing-extensions>=4.16.0'], base
           "
 
   ci-ok:
