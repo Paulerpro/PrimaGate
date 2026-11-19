@@ -40,6 +40,7 @@ def _logged(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR37")
 def test_a_handler_gets_each_event_once_and_the_logger_the_same(
     call: Caller, provider: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -54,6 +55,7 @@ def test_a_handler_gets_each_event_once_and_the_logger_the_same(
     assert all(f"request_id={handler.seen[0].request_id}" in line for line in lines)
 
 
+@pytest.mark.fr("FR37")
 def test_events_are_logged_without_a_handler(
     call: Caller, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -63,6 +65,7 @@ def test_events_are_logged_without_a_handler(
     assert result.choices and len(_logged(caplog)) == 2
 
 
+@pytest.mark.fr("FR37")
 def test_each_call_has_its_own_id_and_every_event_carries_it(call: Caller) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler)
@@ -74,6 +77,7 @@ def test_each_call_has_its_own_id_and_every_event_carries_it(call: Caller) -> No
     assert all(e.request_id.startswith("req-") for e in handler.seen)
 
 
+@pytest.mark.fr("FR37")
 def test_the_driver_stamps_an_iso_utc_timestamp(call: Caller) -> None:
     handler = Recorder()
     call(Run({OPENAI: [_answer]}, event_handler=handler).gate, model=GPT, messages=MSGS)
@@ -81,6 +85,7 @@ def test_the_driver_stamps_an_iso_utc_timestamp(call: Caller) -> None:
         assert event.timestamp.endswith("+00:00") and "T" in event.timestamp
 
 
+@pytest.mark.fr("FR37")
 def test_retries_and_failover_are_all_traceable(call: Caller, delays: list[float]) -> None:
     handler = Recorder()
     routing = {GPT: [{"base_url": B_URL, "api_key": B_KEY}]}
@@ -97,6 +102,7 @@ def test_retries_and_failover_are_all_traceable(call: Caller, delays: list[float
     assert len({e.request_id for e in handler.seen}) == 1
 
 
+@pytest.mark.fr("FR37")
 def test_a_total_failure_ends_with_call_failed(call: Caller) -> None:
     handler = Recorder()
     run = Run(
@@ -110,6 +116,7 @@ def test_a_total_failure_ends_with_call_failed(call: Caller) -> None:
     assert isinstance(final, events.CallFailed) and final.attempts == 2
 
 
+@pytest.mark.fr("FR37")
 def test_a_call_that_fails_before_dispatch_emits_one_call_failed(call: Caller) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler)
@@ -119,6 +126,7 @@ def test_a_call_that_fails_before_dispatch_emits_one_call_failed(call: Caller) -
     assert run.sent == []
 
 
+@pytest.mark.fr("FR37")
 def test_a_stream_failing_before_its_first_chunk_emits_the_same_events(
     stream_call: StreamCaller,
 ) -> None:
@@ -129,6 +137,7 @@ def test_a_stream_failing_before_its_first_chunk_emits_the_same_events(
     assert handler.types == ["dispatch_started", "dispatch_failed", "call_failed"]
 
 
+@pytest.mark.fr("FR37")
 def test_a_stream_that_opens_reports_its_start_and_nothing_more(
     stream_call: StreamCaller,
 ) -> None:
@@ -139,6 +148,7 @@ def test_a_stream_that_opens_reports_its_start_and_nothing_more(
     assert handler.types == ["dispatch_started"]
 
 
+@pytest.mark.fr("FR37")
 def test_a_stream_that_is_retried_keeps_one_id(
     stream_call: StreamCaller, delays: list[float]
 ) -> None:
@@ -159,6 +169,7 @@ def test_a_stream_that_is_retried_keeps_one_id(
     assert len({e.request_id for e in handler.seen}) == 1
 
 
+@pytest.mark.fr("FR10", "FR37")
 def test_a_skipped_fallback_is_reported_before_the_next_start(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -182,6 +193,7 @@ def test_a_skipped_fallback_is_reported_before_the_next_start(
     assert isinstance(skipped, events.AttemptSkipped) and "tools" in skipped.reason
 
 
+@pytest.mark.fr("FR37")
 def test_a_raising_handler_is_logged_and_the_call_goes_on(
     call: Caller, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -200,6 +212,8 @@ def test_a_raising_handler_is_logged_and_the_call_goes_on(
     assert len(failures) == 2 and "handler bug" in str(failures[0].exc_info)
 
 
+@pytest.mark.fr("FR37")
+@pytest.mark.mode_independent("task cancellation exists only in async mode")
 def test_cancellation_inside_a_handler_propagates() -> None:
     def cancelling(event: events.Event) -> None:
         raise asyncio.CancelledError
@@ -209,6 +223,8 @@ def test_cancellation_inside_a_handler_propagates() -> None:
         asyncio.run(run.gate.acompletion(model=GPT, messages=MSGS))
 
 
+@pytest.mark.fr("FR37")
+@pytest.mark.mode_independent("asserts the sync driver; async mode has its own cancellation test")
 def test_a_handler_that_raises_a_base_exception_propagates_in_sync_mode() -> None:
     def interrupting(event: events.Event) -> None:
         raise KeyboardInterrupt
@@ -218,6 +234,8 @@ def test_a_handler_that_raises_a_base_exception_propagates_in_sync_mode() -> Non
         run.gate.completion(model=GPT, messages=MSGS)
 
 
+@pytest.mark.fr("FR37")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_a_handler_must_be_a_plain_function() -> None:
     async def async_handler(event: events.Event) -> None: ...
 

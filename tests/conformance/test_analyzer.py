@@ -101,6 +101,7 @@ def mode(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
+@pytest.mark.fr("FR19", "FR20")
 def test_a_clean_answer_is_read_and_sent_once_to_the_analyzer_alone(mode: str) -> None:
     h = Harness(mode, lambda r: _openai("MEDIUM 0.82"))
     result = h.analyze()
@@ -108,6 +109,7 @@ def test_a_clean_answer_is_read_and_sent_once_to_the_analyzer_alone(mode: str) -
     assert [r.url.host for r in h.sent] == ["api.openai.com"]
 
 
+@pytest.mark.fr("FR19")
 def test_the_analyzer_cost_is_its_own_line(mode: str) -> None:
     result = Harness(mode, lambda r: _openai("SMALL 0.9")).analyze()
     assert result.usage is not None and result.usage.cost is not None
@@ -115,6 +117,7 @@ def test_the_analyzer_cost_is_its_own_line(mode: str) -> None:
     assert result.usage.token_counts is not None and result.usage.token_counts.total_tokens == 104
 
 
+@pytest.mark.fr("FR20")
 def test_below_the_threshold_it_downgrades_without_failing(mode: str) -> None:
     result = Harness(mode, lambda r: _openai("MEDIUM 0.3")).analyze()
     assert result.outcome == Verdict(Tier.SMALL, 0.3, "ambiguous_context_default", True)
@@ -123,12 +126,14 @@ def test_below_the_threshold_it_downgrades_without_failing(mode: str) -> None:
 @pytest.mark.parametrize(
     "text", ["I would say MEDIUM 0.9", "medium 0.9", "MEDIUM 90%", "MEDIUM 0.9. Because...", ""]
 )
+@pytest.mark.fr("FR20")
 def test_a_label_in_longer_text_is_never_extracted(mode: str, text: str) -> None:
     result = Harness(mode, lambda r: _openai(text)).analyze()
     assert result.outcome == AnalyzerFailure("malformed_output")
     assert result.usage is not None
 
 
+@pytest.mark.fr("FR19")
 def test_a_failing_provider_is_a_failure_with_one_send_and_no_retry_or_fallback(mode: str) -> None:
     h = Harness(mode, _down)
     result = h.analyze()
@@ -136,11 +141,13 @@ def test_a_failing_provider_is_a_failure_with_one_send_and_no_retry_or_fallback(
     assert len(h.sent) == 1 and h.sent[0].url.host == "api.openai.com"
 
 
+@pytest.mark.fr("FR20")
 def test_a_not_enabled_tier_is_a_failure(mode: str) -> None:
     result = Harness(mode, lambda r: _openai("POWERFUL 0.99")).analyze()
     assert result.outcome == AnalyzerFailure("tier_not_enabled")
 
 
+@pytest.mark.fr("FR19")
 def test_the_analyzer_may_be_on_another_provider(mode: str) -> None:
     h = Harness(mode, lambda r: _anthropic("SMALL 0.95"))
     result = h.analyze("claude-sonnet-5-5")
@@ -154,6 +161,7 @@ def test_an_empty_view_sends_nothing(mode: str) -> None:
     assert result == Analysis(AnalyzerFailure("no_conversation"), None) and h.sent == []
 
 
+@pytest.mark.fr("FR19")
 def test_the_alias_cannot_be_the_analyzer(mode: str) -> None:
     h = Harness(mode, lambda r: _openai("SMALL 1"))
     with pytest.raises(BadRequestError):
@@ -161,6 +169,7 @@ def test_the_alias_cannot_be_the_analyzer(mode: str) -> None:
     assert h.sent == []
 
 
+@pytest.mark.fr("FR19")
 def test_the_request_carries_the_profile_and_conversation_and_no_tools(mode: str) -> None:
     h = Harness(mode, lambda r: _openai("SMALL 1"))
     h.analyze()
@@ -169,12 +178,14 @@ def test_the_request_carries_the_profile_and_conversation_and_no_tools(mode: str
     assert '"tools"' not in body and '"stream"' not in body
 
 
+@pytest.mark.fr("FR19")
 def test_a_missing_key_is_a_failure_not_a_raise(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     h = Harness(mode, lambda r: _openai("SMALL 1"), keys={})
     assert h.analyze() == Analysis(AnalyzerFailure("provider_error"), None) and h.sent == []
 
 
+@pytest.mark.fr("FR19")
 def test_a_dropped_connection_is_a_failure_with_one_attempt(mode: str) -> None:
     def refuse(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("down")

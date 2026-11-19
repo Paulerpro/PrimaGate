@@ -10,6 +10,10 @@ import primagate.client as client_module
 from primagate import PrimaGate
 from primagate.schema import errors, events
 
+pytestmark = pytest.mark.mode_independent(
+    "checks the README and runs its samples, each written for one mode"
+)
+
 README = (Path(__file__).parents[2] / "README.md").read_text(encoding="utf-8")
 SAMPLES = re.findall(r"```python\n(.*?)```", README, flags=re.DOTALL)
 REPLY = "Hello from the recorded response"

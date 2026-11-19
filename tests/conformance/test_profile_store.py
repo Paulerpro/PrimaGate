@@ -92,16 +92,19 @@ def _write(driver: SyncDriver | AsyncDriver, profile: Profile) -> None:
     assert _step(driver, write_profile(profile, _NEXT)) is _NEXT
 
 
+@pytest.mark.fr("FR29")
 def test_a_driver_built_without_a_store_starts_with_an_empty_one(mode: str) -> None:
     assert _read(_driver(mode)) == [None]
 
 
+@pytest.mark.fr("FR29")
 def test_a_written_profile_is_read_back_through_the_driver(mode: str) -> None:
     driver = _driver(mode, InMemoryProfileStore())
     _write(driver, PROFILE)
     assert _read(driver) == [PROFILE]
 
 
+@pytest.mark.fr("FR29")
 def test_a_later_write_replaces_the_earlier_one(mode: str) -> None:
     driver = _driver(mode, InMemoryProfileStore())
     second = Profile(**{**PROFILE.__dict__, "profile_id": "profile-2"})
@@ -110,6 +113,7 @@ def test_a_later_write_replaces_the_earlier_one(mode: str) -> None:
     assert _read(driver)[0] is second
 
 
+@pytest.mark.fr("FR24", "FR29")
 def test_a_stale_or_old_schema_profile_reaches_core_as_a_miss(mode: str) -> None:
     store = InMemoryProfileStore()
     driver = _driver(mode, store)
@@ -123,6 +127,8 @@ def test_a_stale_or_old_schema_profile_reaches_core_as_a_miss(mode: str) -> None
 
 
 @pytest.mark.parametrize("non_blocking", [True, False])
+@pytest.mark.fr("FR29")
+@pytest.mark.mode_independent("asserts which thread the sync driver uses")
 def test_the_sync_driver_runs_any_store_on_the_calling_thread(non_blocking: bool) -> None:
     store = RecordingStore(non_blocking)
     driver = _driver("sync", store)
@@ -143,11 +149,15 @@ def _async_threads(store: RecordingStore) -> tuple[int, list[int]]:
     return loop_thread, store.threads
 
 
+@pytest.mark.fr("FR29")
+@pytest.mark.mode_independent("asserts which thread the async driver uses")
 def test_the_async_driver_runs_a_non_blocking_store_on_the_loop_thread() -> None:
     loop_thread, ran_on = _async_threads(RecordingStore(non_blocking=True))
     assert ran_on == [loop_thread] * 2
 
 
+@pytest.mark.fr("FR29")
+@pytest.mark.mode_independent("asserts which thread the async driver uses")
 def test_the_async_driver_runs_a_blocking_store_in_a_worker_thread() -> None:
     loop_thread, ran_on = _async_threads(RecordingStore(non_blocking=False))
     assert len(ran_on) == 2
@@ -155,6 +165,7 @@ def test_the_async_driver_runs_a_blocking_store_in_a_worker_thread() -> None:
 
 
 @pytest.mark.parametrize("non_blocking", [True, False])
+@pytest.mark.fr("FR29")
 def test_a_store_error_propagates_unchanged(mode: str, non_blocking: bool) -> None:
     driver = _driver(mode, RecordingStore(non_blocking, fail=True))
     with pytest.raises(Boom, match="read"):
@@ -181,6 +192,7 @@ def _driver_of(gate: PrimaGate, mode: str) -> SyncDriver | AsyncDriver:
     return gate._get_driver() if mode == "sync" else gate._get_async_driver()
 
 
+@pytest.mark.fr("FR29")
 def test_a_new_instance_starts_with_an_empty_store(gates: list[PrimaGate], mode: str) -> None:
     before = _gate(gates)
     _write(_driver_of(before, mode), PROFILE)
@@ -189,6 +201,8 @@ def test_a_new_instance_starts_with_an_empty_store(gates: list[PrimaGate], mode:
     assert _read(_driver_of(after, mode)) == [None]
 
 
+@pytest.mark.fr("FR29")
+@pytest.mark.mode_independent("drives the sync and the async driver in one body")
 def test_one_instance_shares_its_store_between_sync_and_async(gates: list[PrimaGate]) -> None:
     gate = _gate(gates)
     _write(gate._get_driver(), PROFILE)
@@ -198,6 +212,8 @@ def test_one_instance_shares_its_store_between_sync_and_async(gates: list[PrimaG
     assert _read(gate._get_driver())[0] is second
 
 
+@pytest.mark.fr("FR29")
+@pytest.mark.mode_independent("drives the sync and the async driver in one body")
 def test_a_caller_store_serves_both_modes(gates: list[PrimaGate]) -> None:
     store = RecordingStore(non_blocking=True)
     gate = _gate(gates, profile_store=store)
@@ -207,6 +223,7 @@ def test_a_caller_store_serves_both_modes(gates: list[PrimaGate]) -> None:
     assert len(store.threads) == 2
 
 
+@pytest.mark.mode_independent("checks the package exports; makes no call")
 def test_the_store_and_registry_add_no_public_name() -> None:
     # FileProfileStore is the one store a caller builds, so it alone is public.
     for name in (
@@ -219,6 +236,7 @@ def test_the_store_and_registry_add_no_public_name() -> None:
         assert not hasattr(primagate, name), name
 
 
+@pytest.mark.fr("FR29")
 def test_a_file_store_round_trips_through_the_driver(mode: str, tmp_path: Path) -> None:
     driver = _driver(mode, primagate.FileProfileStore(tmp_path / "profile.json"))
     assert _read(driver) == [None]
@@ -226,12 +244,14 @@ def test_a_file_store_round_trips_through_the_driver(mode: str, tmp_path: Path) 
     assert _read(driver) == [PROFILE]
 
 
+@pytest.mark.fr("FR29")
 def test_a_file_store_profile_is_reused_by_a_new_driver(mode: str, tmp_path: Path) -> None:
     path = tmp_path / "profile.json"
     _write(_driver(mode, primagate.FileProfileStore(path)), PROFILE)
     assert _read(_driver(mode, primagate.FileProfileStore(path))) == [PROFILE]
 
 
+@pytest.mark.fr("FR24", "FR29")
 def test_a_stale_or_old_schema_file_reaches_core_as_a_miss(mode: str, tmp_path: Path) -> None:
     store = primagate.FileProfileStore(tmp_path / "profile.json")
     driver = _driver(mode, store)
@@ -246,6 +266,7 @@ def test_a_stale_or_old_schema_file_reaches_core_as_a_miss(mode: str, tmp_path: 
 
 
 @pytest.mark.parametrize("content", [b'{"profile_id": "p"', b"\xff\xfe", b'{"extra": 1}'])
+@pytest.mark.fr("FR29")
 def test_a_corrupt_file_is_a_miss_then_overwritten(
     mode: str, tmp_path: Path, content: bytes
 ) -> None:
@@ -257,12 +278,14 @@ def test_a_corrupt_file_is_a_miss_then_overwritten(
     assert _read(driver) == [PROFILE]
 
 
+@pytest.mark.fr("FR29")
 def test_a_file_store_creates_a_missing_directory(mode: str, tmp_path: Path) -> None:
     driver = _driver(mode, primagate.FileProfileStore(tmp_path / "dir" / "sub" / "p.json"))
     _write(driver, PROFILE)
     assert _read(driver) == [PROFILE]
 
 
+@pytest.mark.fr("FR29")
 def test_a_file_store_os_error_propagates(mode: str, tmp_path: Path) -> None:
     path = tmp_path / "profile.json"
     path.mkdir()
@@ -273,6 +296,7 @@ def test_a_file_store_os_error_propagates(mode: str, tmp_path: Path) -> None:
         _write(driver, PROFILE)
 
 
+@pytest.mark.fr("FR29")
 def test_a_failed_file_write_keeps_the_old_profile(
     mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -304,6 +328,8 @@ class ThreadNotingFileStore(primagate.FileProfileStore):
         super().write(profile)
 
 
+@pytest.mark.fr("FR29")
+@pytest.mark.mode_independent("asserts which thread the async driver uses")
 def test_the_async_driver_runs_the_file_store_in_a_worker_thread(tmp_path: Path) -> None:
     store = ThreadNotingFileStore(tmp_path / "profile.json")
     loop_thread, ran_on = _async_threads(store)  # type: ignore[arg-type]
@@ -312,6 +338,7 @@ def test_the_async_driver_runs_the_file_store_in_a_worker_thread(tmp_path: Path)
     assert store.read() == PROFILE
 
 
+@pytest.mark.fr("FR29")
 def test_a_gate_on_a_file_store_reuses_the_profile_after_a_restart(
     gates: list[PrimaGate], mode: str, tmp_path: Path
 ) -> None:

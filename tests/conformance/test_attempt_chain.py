@@ -136,6 +136,7 @@ def _row(provider: str, error: ErrorInfo | None = None) -> Attempt:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR11")
 def test_a_success_reports_one_attempt_with_one_dispatch(call: Caller, provider: str) -> None:
     result = call(_gate(_answer), model=MODELS[provider], messages=MSGS)
     assert result.metadata is not None
@@ -145,6 +146,7 @@ def test_a_success_reports_one_attempt_with_one_dispatch(call: Caller, provider:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR11")
 def test_a_failure_raises_the_plain_error_with_the_chain(call: Caller, provider: str) -> None:
     with pytest.raises(errors.RateLimitError) as raised:
         call(_gate(_fail(429)), model=MODELS[provider], messages=MSGS)
@@ -152,6 +154,7 @@ def test_a_failure_raises_the_plain_error_with_the_chain(call: Caller, provider:
     assert raised.value.attempt_chain == [_row(provider, info)]
 
 
+@pytest.mark.fr("FR11")
 def test_a_failure_before_any_dispatch_has_an_empty_chain(call: Caller) -> None:
     gate = _gate(_answer)
     with pytest.raises(errors.BadRequestError) as unknown:
@@ -200,6 +203,7 @@ def _assert_no_key(error: errors.PrimaGateError, key: str) -> None:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR11")
 def test_the_final_stream_chunk_carries_the_chain(stream_call: StreamCaller, provider: str) -> None:
     run = stream_call(_gate(_answer), model=MODELS[provider], messages=MSGS)
     assert run.call_error is None and run.read_error is None
@@ -209,6 +213,7 @@ def test_the_final_stream_chunk_carries_the_chain(stream_call: StreamCaller, pro
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR11")
 def test_a_stream_that_fails_to_open_raises_with_the_chain(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -219,6 +224,7 @@ def test_a_stream_that_fails_to_open_raises_with_the_chain(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR11")
 def test_a_mid_stream_failure_carries_the_chain(stream_call: StreamCaller, provider: str) -> None:
     def respond(p: str, stream: bool) -> httpx2.Response:
         body = _stream_body(p, full=False)

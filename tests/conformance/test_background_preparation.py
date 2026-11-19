@@ -34,6 +34,9 @@ ROUTED: dict[str, Any] = {
 }
 
 
+PRICE = {"gpt-4o": {"input": 9.0, "output": 9.0}}
+
+
 def _asking(n: int) -> dict[str, Any]:
     # A different question each time, so no call is answered from the Cache before routing.
     return {**ROUTED, "messages": [{"role": "user", "content": f"question {n}"}]}
@@ -70,10 +73,10 @@ class Background:
         self.analyzer_prompts: list[str] = []
         self.handler = Recorder()
         kwargs.setdefault("profile_sources", DECLARED)
+        kwargs.setdefault("tier_bindings", TWO)
         self.gate = PrimaGate(
             api_keys=KEYS,
             transport=httpx2.MockTransport(self._handle),
-            tier_bindings=TWO,
             policy=POLICY,
             analyzer="gpt-4o-mini",
             event_handler=self.handler,
@@ -183,6 +186,7 @@ def _prep_events(run: Background) -> list[events.Event]:
 # --- the first request ---
 
 
+@pytest.mark.fr("FR22", "FR23")
 def test_the_first_routed_call_starts_one_preparation_and_does_not_wait(mode: str) -> None:
     run = Background(mode, [GOOD], hold=True)
 
@@ -224,6 +228,7 @@ def no_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(asyncio, "sleep", instant)
 
 
+@pytest.mark.fr("FR23")
 def test_every_preparation_event_has_a_prep_id_and_the_call_keeps_req(
     mode: str, no_waits: None
 ) -> None:
@@ -237,6 +242,7 @@ def test_every_preparation_event_has_a_prep_id_and_the_call_keeps_req(
     assert "preparation_failed" in run.types and "profile_ready" in run.types
 
 
+@pytest.mark.fr("FR23")
 def test_twenty_concurrent_first_calls_start_exactly_one(mode: str) -> None:
     run = Background(mode, [GOOD])
     if mode == "sync":
@@ -271,6 +277,7 @@ def test_twenty_concurrent_first_calls_start_exactly_one(mode: str) -> None:
     assert run.state is PrepState.READY
 
 
+@pytest.mark.fr("FR23")
 def test_a_ready_fingerprint_is_not_prepared_again(mode: str) -> None:
     run = Background(mode, [GOOD])
     for n in range(3):
@@ -292,6 +299,7 @@ def _profile(fingerprint: str) -> Profile:
     )
 
 
+@pytest.mark.fr("FR29")
 def test_a_matching_stored_profile_is_reused_after_a_restart(mode: str, tmp_path: Path) -> None:
     path = tmp_path / "profile.json"
     first = Background(mode, [GOOD], profile_store=FileProfileStore(path))
@@ -308,6 +316,7 @@ def test_a_matching_stored_profile_is_reused_after_a_restart(mode: str, tmp_path
     assert not any(t.startswith("prep") or t == "profile_ready" for t in second.types)
 
 
+@pytest.mark.fr("FR24", "FR29")
 def test_a_stale_stored_profile_is_prepared_again_and_replaced(mode: str) -> None:
     store = InMemoryProfileStore()
     store.write(_profile("fp-from-other-sources"))
@@ -318,9 +327,39 @@ def test_a_stale_stored_profile_is_prepared_again_and_replaced(mode: str) -> Non
     assert run.stored.profile_id.startswith("prep-") and run.stored.profile_id != "prep-earlier"
 
 
+@pytest.mark.fr("FR17", "FR24")
+def test_only_a_changed_source_gives_a_new_fingerprint_and_a_new_preparation(
+    mode: str, tmp_path: Path
+) -> None:
+    path = tmp_path / "profile.json"
+    first = Background(mode, [GOOD], profile_store=FileProfileStore(path))
+    first.run()
+    assert first.state is PrepState.READY and len(first.prepared) == 1
+
+    # Prices and bindings are not sources, so instances differing only there reuse the Profile.
+    priced = {**TWO, "SMALL": {"model": "gpt-4o-mini", "pricing": {"input": 1.0, "output": 2.0}}}
+    for unchanged in (
+        Background(mode, [], profile_store=FileProfileStore(path), price_overrides=PRICE),
+        Background(mode, [], profile_store=FileProfileStore(path), tier_bindings=priced),
+    ):
+        assert unchanged.fingerprint == first.fingerprint
+        unchanged.run()
+        assert unchanged.prepared == [] and unchanged.state is PrepState.READY
+
+    sources = {**DECLARED, "instructions": SECRET + " Refunds are handled too."}
+    changed = Background(
+        mode, [GOOD], profile_store=FileProfileStore(path), profile_sources=sources
+    )
+    assert changed.fingerprint != first.fingerprint
+    changed.run()
+    assert len(changed.prepared) == 1 and changed.state is PrepState.READY
+    assert changed.stored.input_fingerprint == changed.fingerprint
+
+
 # --- calls that never prepare ---
 
 
+@pytest.mark.fr("FR23")
 def test_no_sources_means_no_runner_and_no_preparation(mode: str) -> None:
     run = Background(mode, [], profile_sources=None)
     assert run.gate._runner is None
@@ -332,6 +371,7 @@ def test_no_sources_means_no_runner_and_no_preparation(mode: str) -> None:
     assert not any(t.startswith("prep") for t in run.types)
 
 
+@pytest.mark.fr("FR15", "FR23")
 def test_a_plain_model_call_never_prepares(mode: str) -> None:
     run = Background(mode, [])
     run.run(model="gpt-4o")
@@ -365,6 +405,7 @@ class FailingStore(InMemoryProfileStore):
 
 @pytest.mark.parametrize("non_blocking", [True, False])
 @pytest.mark.parametrize(("on", "attempt"), [("write", 1), ("read", 0)])
+@pytest.mark.fr("FR23")
 def test_a_store_error_is_a_final_store_error_failure_and_escapes_nowhere(
     mode: str, non_blocking: bool, on: str, attempt: int
 ) -> None:
@@ -382,6 +423,7 @@ def test_a_store_error_is_a_final_store_error_failure_and_escapes_nowhere(
         assert failed.request_id == started.request_id
 
 
+@pytest.mark.fr("FR23")
 def test_an_unexpected_error_is_a_final_provider_error(
     mode: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -398,6 +440,10 @@ def test_an_unexpected_error_is_a_final_provider_error(
     assert logged.levelno == logging.DEBUG and logged.exc_info is not None
 
 
+@pytest.mark.fr("FR23")
+@pytest.mark.mode_independent(
+    "drives the sync runner's job directly; async preparation runs no such job"
+)
 def test_a_sync_job_hit_by_a_base_exception_records_a_failure_and_lets_it_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -419,6 +465,7 @@ def test_a_sync_job_hit_by_a_base_exception_records_a_failure_and_lets_it_throug
     assert run.runner.try_start(run.fingerprint)
 
 
+@pytest.mark.fr("FR23")
 def test_a_failure_waits_out_the_cooldown_before_one_new_start(mode: str) -> None:
     clock = Clock()
     run = Background(mode, [_status(401), GOOD], clock=clock)
@@ -436,6 +483,7 @@ def test_a_failure_waits_out_the_cooldown_before_one_new_start(mode: str) -> Non
     assert run.types.count("preparation_started") == 2
 
 
+@pytest.mark.fr("FR23", "FR24")
 def test_an_overflow_failure_is_never_restarted(mode: str) -> None:
     clock = Clock()
     run = Background(mode, [], clock=clock, profile_sources={"instructions": "word " * 20_000})
@@ -449,6 +497,8 @@ def test_an_overflow_failure_is_never_restarted(mode: str) -> None:
 # --- where it runs ---
 
 
+@pytest.mark.fr("FR23")
+@pytest.mark.mode_independent("asserts where the sync runner works")
 def test_a_sync_call_prepares_on_a_daemon_thread() -> None:
     run = Background("sync", [GOOD])
     run.run()
@@ -456,6 +506,8 @@ def test_a_sync_call_prepares_on_a_daemon_thread() -> None:
     assert thread.daemon and thread is not threading.main_thread()
 
 
+@pytest.mark.fr("FR23")
+@pytest.mark.mode_independent("asserts where the async runner works")
 def test_an_async_call_prepares_on_a_task_of_its_own_loop() -> None:
     run = Background("async", [GOOD], hold=True)
 
@@ -473,6 +525,8 @@ def test_an_async_call_prepares_on_a_task_of_its_own_loop() -> None:
     assert run.state is PrepState.READY
 
 
+@pytest.mark.fr("FR23", "FR27")
+@pytest.mark.mode_independent("only an event loop can end under a running preparation")
 def test_an_async_preparation_cut_off_by_its_loop_ending_waits_out_the_cooldown() -> None:
     clock = Clock()
     run = Background("async", [GOOD, GOOD], hold=True, clock=clock)
@@ -500,6 +554,7 @@ def test_an_async_preparation_cut_off_by_its_loop_ending_waits_out_the_cooldown(
 # --- request in flight keeps what it started with ---
 
 
+@pytest.mark.fr("FR23")
 def test_only_a_call_that_starts_once_ready_reads_the_profile(mode: str) -> None:
     run = Background(mode, [GOOD])
     pinned = run.gate._tier_routing
@@ -524,6 +579,7 @@ class CountingStore(InMemoryProfileStore):
         super().write(profile)
 
 
+@pytest.mark.fr("FR23")
 def test_only_the_preparation_writes_a_profile(mode: str) -> None:
     store = CountingStore()
     run = Background(mode, [GOOD], profile_store=store)
@@ -537,6 +593,7 @@ def test_only_the_preparation_writes_a_profile(mode: str) -> None:
 # --- stopping ---
 
 
+@pytest.mark.fr("FR23", "FR27")
 def test_close_mid_preparation_stops_it_with_the_store_unchanged(mode: str) -> None:
     store = CountingStore()
     run = Background(mode, [GOOD], hold=True, profile_store=store)
@@ -561,6 +618,7 @@ def test_close_mid_preparation_stops_it_with_the_store_unchanged(mode: str) -> N
     assert run.runner.try_start(run.fingerprint) is False
 
 
+@pytest.mark.fr("FR23", "FR27")
 def test_aclose_mid_preparation_cancels_and_awaits_it(mode: str) -> None:
     store = CountingStore()
     run = Background(mode, [GOOD], hold=True, profile_store=store)
@@ -585,10 +643,10 @@ def test_aclose_mid_preparation_cancels_and_awaits_it(mode: str) -> None:
     assert [e.event_type for e in _prep_events(run)] == ["preparation_started"]
 
 
-@pytest.mark.parametrize("how", ["close", "aclose"])
-def test_after_close_nothing_starts(how: str) -> None:
-    run = Background("sync", [])
-    if how == "close":
+@pytest.mark.fr("FR23")
+def test_after_close_nothing_starts(mode: str) -> None:
+    run = Background(mode, [])
+    if mode == "sync":
         run.gate.close()
     else:
         asyncio.run(run.gate.aclose())

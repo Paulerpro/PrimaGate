@@ -7,6 +7,8 @@ from test_tier_routing import POLICY, Run
 
 from primagate.schema import events
 
+pytestmark = pytest.mark.fr("FR35")
+
 ALIAS = "primagate/auto"
 # One routed call costs about 4e-5 dollars here: gpt-4o's answer plus gpt-4o-mini's analysis.
 ONE_CALL = 4.0e-5
@@ -124,6 +126,7 @@ def test_two_instances_keep_separate_totals(call: Caller) -> None:
     assert a.gate._spend.total > 0 and b.gate._spend.total == 0.0
 
 
+@pytest.mark.mode_independent("drives the sync and the async driver in one body")
 def test_one_total_serves_both_drivers_of_an_instance() -> None:
     run = _run(1.0)
     assert run.gate._get_driver()._spend is run.gate._get_async_driver()._spend is run.gate._spend
@@ -149,6 +152,7 @@ def test_a_call_with_only_a_priced_analyzer_is_counted(call: Caller) -> None:
     assert len(_crossings(run)) == 1
 
 
+@pytest.mark.mode_independent("checks the spend step directly; makes no call")
 def test_a_non_finite_or_negative_amount_never_reaches_the_total() -> None:
     import math
 

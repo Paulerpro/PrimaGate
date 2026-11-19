@@ -25,6 +25,7 @@ TOOL = {"type": "function", "function": {"name": "f", "parameters": {"type": "ob
     ("primary", "backup", "primary_host", "backup_host"),
     [(GPT, CLAUDE, OPENAI, ANTHROPIC), (CLAUDE, GPT, ANTHROPIC, OPENAI)],
 )
+@pytest.mark.fr("FR11")
 def test_everything_failing_raises_one_error_holding_every_attempt(
     call: Caller,
     delays: list[float],
@@ -55,6 +56,7 @@ def test_everything_failing_raises_one_error_holding_every_attempt(
 
 
 @pytest.mark.parametrize("status", [400, 401, 429])
+@pytest.mark.fr("FR11")
 def test_whatever_class_ends_the_chain_the_aggregate_is_raised(call: Caller, status: int) -> None:
     run = Run({OPENAI: [_status(503)], ANTHROPIC: [_status(status)]}, **_fallbacks(CLAUDE))
     with pytest.raises(errors.AttemptsExhaustedError) as raised:
@@ -68,6 +70,7 @@ def test_whatever_class_ends_the_chain_the_aggregate_is_raised(call: Caller, sta
     assert len(raised.value.attempts) == 2
 
 
+@pytest.mark.fr("FR9", "FR12")
 def test_the_outage_scenario_still_gives_an_answer_with_the_chain(
     call: Caller, delays: list[float]
 ) -> None:
@@ -82,6 +85,7 @@ def test_the_outage_scenario_still_gives_an_answer_with_the_chain(
     assert second.dispatches[0].error is None
 
 
+@pytest.mark.fr("FR11")
 def test_a_single_attempt_keeps_its_plain_error_whatever_the_endpoint_count(
     call: Caller, delays: list[float]
 ) -> None:
@@ -93,6 +97,7 @@ def test_a_single_attempt_keeps_its_plain_error_whatever_the_endpoint_count(
     assert len(raised.value.attempt_chain) == 1
 
 
+@pytest.mark.fr("FR11")
 def test_a_lone_raise_class_error_stays_plain_with_fallbacks_declared(call: Caller) -> None:
     run = Run({OPENAI: [_status(400)], ANTHROPIC: [_answer]}, **_fallbacks(CLAUDE))
     with pytest.raises(errors.BadRequestError) as raised:
@@ -100,6 +105,7 @@ def test_a_lone_raise_class_error_stays_plain_with_fallbacks_declared(call: Call
     assert type(raised.value) is errors.BadRequestError and len(run.sent) == 1
 
 
+@pytest.mark.fr("FR11")
 def test_a_failure_before_any_dispatch_stays_plain_with_an_empty_chain(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -111,6 +117,7 @@ def test_a_failure_before_any_dispatch_stays_plain_with_an_empty_chain(
     assert raised.value.attempt_chain == [] and run.sent == []
 
 
+@pytest.mark.fr("FR10", "FR11")
 def test_one_attempt_then_only_skipped_candidates_gives_the_aggregate(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -125,6 +132,7 @@ def test_one_attempt_then_only_skipped_candidates_gives_the_aggregate(
     assert len(run.sent) == 1
 
 
+@pytest.mark.fr("FR11")
 def test_a_stream_that_fails_to_open_everywhere_raises_the_aggregate(
     stream_call: StreamCaller,
 ) -> None:
@@ -134,6 +142,7 @@ def test_a_stream_that_fails_to_open_everywhere_raises_the_aggregate(
     assert len(result.call_error.attempts) == 2 and result.chunks == []
 
 
+@pytest.mark.fr("FR11")
 def test_a_stream_that_fails_after_its_first_chunk_ends_with_the_plain_error(
     stream_call: StreamCaller,
 ) -> None:

@@ -63,6 +63,7 @@ def _counts(result: Any) -> tuple[int, int, bool]:
     return counts.prompt_tokens, counts.completion_tokens, counts.heuristic
 
 
+@pytest.mark.fr("FR34")
 def test_with_tiktoken_installed_counts_come_from_it(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -73,6 +74,7 @@ def test_with_tiktoken_installed_counts_come_from_it(
     assert result.metadata.cost is not None
 
 
+@pytest.mark.fr("FR34")
 def test_a_model_tiktoken_does_not_know_uses_the_default_encoding(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -82,6 +84,7 @@ def test_a_model_tiktoken_does_not_know_uses_the_default_encoding(
     assert _counts(result)[2] is False and fake.asked == ["o200k_base"]
 
 
+@pytest.mark.fr("FR34")
 def test_without_tiktoken_the_heuristic_counts_and_says_so(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -91,6 +94,7 @@ def test_without_tiktoken_the_heuristic_counts_and_says_so(
     assert result.to_dict()["metadata"]["token_counts"]["heuristic"] is True
 
 
+@pytest.mark.fr("FR34")
 def test_a_failed_load_falls_back_once_and_is_not_retried(
     call: Caller, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -107,6 +111,7 @@ def test_a_failed_load_falls_back_once_and_is_not_retried(
     assert len(warned) == 1 and "tiktoken" in warned[0].getMessage()
 
 
+@pytest.mark.fr("FR34")
 def test_text_that_looks_like_a_special_token_is_counted_not_refused(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -119,6 +124,7 @@ def test_text_that_looks_like_a_special_token_is_counted_not_refused(
     assert _counts(result)[2] is False
 
 
+@pytest.mark.fr("FR34")
 def test_a_caller_counter_replaces_the_default(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -138,6 +144,7 @@ def test_a_caller_counter_replaces_the_default(
 
 
 @pytest.mark.parametrize("bad", ["raises", -1, 2.5, True, "7"])
+@pytest.mark.fr("FR34")
 def test_a_bad_counter_falls_back_for_that_call_and_never_raises(
     call: Caller, caplog: pytest.LogCaptureFixture, bad: Any
 ) -> None:
@@ -153,6 +160,7 @@ def test_a_bad_counter_falls_back_for_that_call_and_never_raises(
     assert any(r.levelno == logging.WARNING for r in caplog.records if r.name == "primagate")
 
 
+@pytest.mark.fr("FR34")
 def test_provider_usage_means_the_counter_is_not_asked(call: Caller) -> None:
     asked: list[str] = []
 
@@ -165,6 +173,8 @@ def test_provider_usage_means_the_counter_is_not_asked(call: Caller) -> None:
     assert asked == [] and _counts(result)[2] is False
 
 
+@pytest.mark.fr("FR34")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_a_counter_must_be_a_plain_callable() -> None:
     async def slow(model: str, text: str) -> int:
         return 1
@@ -175,6 +185,8 @@ def test_a_counter_must_be_a_plain_callable() -> None:
         PrimaGate(token_counter=slow)  # type: ignore[arg-type]
 
 
+@pytest.mark.fr("FR34")
+@pytest.mark.mode_independent("only async mode has an event loop to block")
 async def test_a_slow_counter_does_not_block_the_event_loop() -> None:
     def slow(model: str, text: str) -> int:
         time.sleep(0.15)
@@ -197,6 +209,7 @@ async def test_a_slow_counter_does_not_block_the_event_loop() -> None:
     assert ticks >= 5, ticks
 
 
+@pytest.mark.fr("FR34")
 def test_a_stream_that_reports_no_usage_is_left_uncounted(stream_call: StreamCaller) -> None:
     def no_usage_stream(provider: str, stream: bool) -> httpx2.Response:
         body = _openai_chunk({"content": "ok"}) + _openai_chunk({}, "stop") + "data: [DONE]\n\n"
@@ -208,6 +221,7 @@ def test_a_stream_that_reports_no_usage_is_left_uncounted(stream_call: StreamCal
     assert final.metadata is not None and final.metadata.token_counts is None
 
 
+@pytest.mark.fr("FR33", "FR34")
 def test_a_counted_fallback_answer_keeps_its_chain_and_is_priced_as_the_fallback(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -230,6 +244,7 @@ def test_a_counted_fallback_answer_keeps_its_chain_and_is_priced_as_the_fallback
     assert done.attempts == 2  # type: ignore[attr-defined]
 
 
+@pytest.mark.fr("FR33", "FR34")
 def test_a_counted_response_for_an_unpriced_model_is_flagged_and_warned(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:

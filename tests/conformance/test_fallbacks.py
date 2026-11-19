@@ -33,6 +33,7 @@ def _failing(**kwargs: Any) -> tuple[PrimaGate, list[httpx2.Request]]:
     ],
     ids=["omitted", "none", "empty"],
 )
+@pytest.mark.fr("FR8")
 def test_no_fallback_list_is_the_same_as_an_empty_one(
     call: Caller, provider: str, declared: dict[str, Any]
 ) -> None:
@@ -43,6 +44,8 @@ def test_no_fallback_list_is_the_same_as_an_empty_one(
     assert len(raised.value.attempt_chain) == 1
 
 
+@pytest.mark.fr("FR7")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_setup_rejects_a_bad_declaration_before_any_call() -> None:
     with pytest.raises(errors.BadRequestError, match="gpt-4o"):
         PrimaGate(api_keys=KEYS, fallbacks={"gpt-4o": "claude-sonnet-5-5"})

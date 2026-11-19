@@ -63,6 +63,7 @@ def _shape(value: Any) -> Any:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_structured_content_is_valid_json_for_the_schema(call: Caller, provider: str) -> None:
     sent: list[dict[str, Any]] = []
     result = call(
@@ -76,6 +77,7 @@ def test_structured_content_is_valid_json_for_the_schema(call: Caller, provider:
     assert ("output_config" in sent[0]) == (provider == "anthropic")
 
 
+@pytest.mark.fr("FR1", "FR2")
 def test_response_shape_is_identical_across_providers(call: Caller) -> None:
     gate = _gate([])
     shapes = {

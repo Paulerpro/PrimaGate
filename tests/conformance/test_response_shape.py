@@ -1,9 +1,12 @@
 from typing import Any
 
 import httpx2
+import pytest
 from conftest import Caller
 
 from primagate import PrimaGate
+
+pytestmark = pytest.mark.fr("FR1")
 
 MSGS = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]
 

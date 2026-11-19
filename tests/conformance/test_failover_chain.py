@@ -21,6 +21,7 @@ def _rows(chain: list[Any]) -> list[tuple[str, bool]]:
     return [(row.model, row.skipped is None) for row in chain]
 
 
+@pytest.mark.fr("FR30")
 def test_the_chain_runs_resolved_tier_then_medium_then_the_fallback_list(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     run = Run(["SMALL 0.9"], script, default_fallbacks=[F])
@@ -44,6 +45,7 @@ def test_the_chain_runs_resolved_tier_then_medium_then_the_fallback_list(call: C
     assert len(run.decisions) == 1
 
 
+@pytest.mark.fr("FR30")
 def test_a_failed_medium_choice_goes_straight_to_the_fallback_list(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"], {GPT: [_status(503)]}, default_fallbacks=[F])
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -52,6 +54,7 @@ def test_a_failed_medium_choice_goes_straight_to_the_fallback_list(call: Caller)
     assert run.of(events.AttemptSkipped) == []
 
 
+@pytest.mark.fr("FR30")
 def test_a_skipped_medium_is_followed_by_the_fallback_list(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, policy=NO_MEDIUM, default_fallbacks=[F])
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -66,6 +69,7 @@ def test_a_skipped_medium_is_followed_by_the_fallback_list(call: Caller) -> None
     assert skip.reason == "MEDIUM is not in enabled_tiers"
 
 
+@pytest.mark.fr("FR30")
 def test_a_listed_model_that_already_ran_as_the_failover_is_not_run_again(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     run = Run(["SMALL 0.9"], script, default_fallbacks=[GPT, F])
@@ -77,6 +81,7 @@ def test_a_listed_model_that_already_ran_as_the_failover_is_not_run_again(call: 
 
 
 @pytest.mark.parametrize("listed", [MINI, f"openai/{MINI}"])
+@pytest.mark.fr("FR30")
 def test_a_listed_model_that_is_the_resolved_tier_is_not_run_again(
     call: Caller, listed: str
 ) -> None:
@@ -87,6 +92,7 @@ def test_a_listed_model_that_is_the_resolved_tier_is_not_run_again(
     assert run.of(events.AttemptSkipped) == []
 
 
+@pytest.mark.fr("FR30")
 def test_a_listed_medium_model_still_runs_when_medium_was_only_skipped(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, policy=NO_MEDIUM, default_fallbacks=[GPT])
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -100,6 +106,7 @@ def test_a_listed_medium_model_still_runs_when_medium_was_only_skipped(call: Cal
     ]
 
 
+@pytest.mark.fr("FR10", "FR25")
 def test_a_fallback_is_judged_by_its_providers_capabilities_not_a_tiers_limits(
     call: Caller,
 ) -> None:
@@ -115,6 +122,7 @@ def test_a_fallback_is_judged_by_its_providers_capabilities_not_a_tiers_limits(
     assert answered.skipped is None and result.metadata.dropped_params == []
 
 
+@pytest.mark.fr("FR10")
 def test_an_incapable_fallback_is_a_skipped_row_and_the_next_is_tried(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -134,6 +142,7 @@ def test_an_incapable_fallback_is_a_skipped_row_and_the_next_is_tried(
     assert skip.model == f"anthropic/{CLAUDE}" and "tools" in skip.reason
 
 
+@pytest.mark.fr("FR11", "FR30")
 def test_when_every_layer_fails_the_error_holds_the_whole_chain_in_order(call: Caller) -> None:
     down = [_status(503)]
     script = {MINI: down, GPT: down, F: down, D: down}
@@ -150,6 +159,7 @@ def test_when_every_layer_fails_the_error_holds_the_whole_chain_in_order(call: C
     assert failed.attempts == 4
 
 
+@pytest.mark.fr("FR10", "FR11")
 def test_the_chain_with_skips_keeps_them_in_place_when_everything_fails(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -173,6 +183,7 @@ def test_the_chain_with_skips_keeps_them_in_place_when_everything_fails(
     assert len(raised.value.attempts) == 2
 
 
+@pytest.mark.fr("FR30")
 def test_a_raise_class_error_on_medium_stops_before_the_fallback_list(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(400)]}
     run = Run(["SMALL 0.9"], script, default_fallbacks=[F])
@@ -183,6 +194,7 @@ def test_a_raise_class_error_on_medium_stops_before_the_fallback_list(call: Call
     assert len(raised.value.attempt_chain) == 2
 
 
+@pytest.mark.fr("FR30")
 def test_a_raise_class_error_on_the_resolved_tier_stops_everything(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(400)]}, default_fallbacks=[F])
     with pytest.raises(errors.BadRequestError):
@@ -190,6 +202,7 @@ def test_a_raise_class_error_on_the_resolved_tier_stops_everything(call: Caller)
     assert run.models == [MINI]
 
 
+@pytest.mark.fr("FR7")
 def test_the_resolved_tiers_own_list_replaces_the_default(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     run = Run(["SMALL 0.9"], script, fallbacks={MINI: [F]}, default_fallbacks=[D])
@@ -197,6 +210,7 @@ def test_the_resolved_tiers_own_list_replaces_the_default(call: Caller) -> None:
     assert run.models == [MINI, GPT, F]
 
 
+@pytest.mark.fr("FR7")
 def test_another_models_list_is_not_used_so_the_default_applies(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     # A list keyed by MEDIUM's model belongs to MEDIUM as a plain call, not to this chain.
@@ -205,6 +219,7 @@ def test_another_models_list_is_not_used_so_the_default_applies(call: Caller) ->
     assert run.models == [MINI, GPT, D]
 
 
+@pytest.mark.fr("FR22", "FR31")
 def test_a_degraded_call_uses_the_interim_tiers_list_and_its_answer_is_not_cached(
     call: Caller,
 ) -> None:
@@ -225,6 +240,7 @@ def test_a_degraded_call_uses_the_interim_tiers_list_and_its_answer_is_not_cache
     assert run.models == [MINI, GPT, F] * 2 and len(run.analyzed) == 2
 
 
+@pytest.mark.fr("FR31")
 def test_a_routed_fallback_answer_is_cached_like_any_routed_answer(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     run = Run(["SMALL 0.9"], script, default_fallbacks=[F])
@@ -234,6 +250,7 @@ def test_a_routed_fallback_answer_is_cached_like_any_routed_answer(call: Caller)
     assert run.models == [MINI, GPT, F] and len(run.analyzed) == 1
 
 
+@pytest.mark.fr("FR35")
 def test_the_spend_counts_the_fallback_answer_and_the_one_analyzer_cost(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     policy = {**POLICY, "spending_ceiling": 1.0}
@@ -245,6 +262,7 @@ def test_the_spend_counts_the_fallback_answer_and_the_one_analyzer_cost(call: Ca
     assert run.gate._spend.total == pytest.approx(meta.cost.total + meta.analyzer.cost.total)
 
 
+@pytest.mark.fr("FR35")
 def test_a_plain_call_with_a_fallback_list_still_counts_no_spend(call: Caller) -> None:
     policy = {**POLICY, "spending_ceiling": 1.0}
     run = Run(["SMALL 0.9"], {GPT: [_status(503)]}, policy=policy, default_fallbacks=[F])
@@ -254,6 +272,7 @@ def test_a_plain_call_with_a_fallback_list_still_counts_no_spend(call: Caller) -
 
 
 @pytest.mark.usefixtures("delays")
+@pytest.mark.fr("FR9")
 def test_each_fallback_gets_its_own_provider_routing_and_retries(call: Caller) -> None:
     routing = {F: [{"base_url": B_URL, "api_key": B_KEY}]}
     script = {MINI: [_status(503)], GPT: [_status(503)], F: [_status(503)] * 3 + [_answer]}
@@ -267,6 +286,7 @@ def test_each_fallback_gets_its_own_provider_routing_and_retries(call: Caller) -
     assert [d.retries for d in fallback.dispatches] == [2, 0]
 
 
+@pytest.mark.fr("FR30")
 def test_a_powerful_tier_chain_has_the_same_order(call: Caller) -> None:
     script = {FOUR: [_status(401)], GPT: [_status(503)]}
     run = Run(["POWERFUL 0.9"], script, default_fallbacks=[F])
@@ -275,6 +295,7 @@ def test_a_powerful_tier_chain_has_the_same_order(call: Caller) -> None:
     assert result.metadata is not None and result.metadata.tier is None
 
 
+@pytest.mark.fr("FR35")
 def test_a_fallback_answer_that_crosses_the_ceiling_sends_the_warning(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     policy = {**POLICY, "spending_ceiling": 0.000001}
@@ -289,6 +310,7 @@ def test_a_fallback_answer_that_crosses_the_ceiling_sends_the_warning(call: Call
     assert warning.total == pytest.approx(meta.cost.total + meta.analyzer.cost.total)
 
 
+@pytest.mark.fr("FR7")
 def test_an_empty_list_for_the_resolved_model_keeps_the_default_off(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)]}
     run = Run(["SMALL 0.9"], script, fallbacks={MINI: []}, default_fallbacks=[D])
@@ -298,6 +320,7 @@ def test_an_empty_list_for_the_resolved_model_keeps_the_default_off(call: Caller
     assert _rows(raised.value.attempt_chain) == [(f"openai/{MINI}", True), (f"openai/{GPT}", True)]
 
 
+@pytest.mark.fr("FR7", "FR11")
 def test_a_raise_class_error_on_a_fallback_stops_before_the_next_entry(call: Caller) -> None:
     script = {MINI: [_status(503)], GPT: [_status(503)], F: [_status(400)]}
     run = Run(["SMALL 0.9"], script, default_fallbacks=[F, D])
@@ -312,6 +335,7 @@ def test_a_raise_class_error_on_a_fallback_stops_before_the_next_entry(call: Cal
     ]
 
 
+@pytest.mark.fr("FR22", "FR30")
 def test_a_degraded_call_on_an_interim_medium_uses_mediums_own_list(call: Caller) -> None:
     run = Run(["nonsense"], {GPT: [_status(503)]}, fallbacks={GPT: [F]}, default_fallbacks=[D])
     result = call(run.gate, model=ALIAS, messages=MSGS)

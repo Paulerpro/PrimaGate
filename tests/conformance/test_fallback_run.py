@@ -38,6 +38,7 @@ def _fallbacks(*names: str) -> dict[str, Any]:
     ("primary", "backup", "primary_host", "backup_host"),
     [(GPT, CLAUDE, OPENAI, ANTHROPIC), (CLAUDE, GPT, ANTHROPIC, OPENAI)],
 )
+@pytest.mark.fr("FR7")
 def test_a_backup_answers_when_the_primary_fails(
     call: Caller, primary: str, backup: str, primary_host: str, backup_host: str
 ) -> None:
@@ -51,6 +52,7 @@ def test_a_backup_answers_when_the_primary_fails(
     assert first.dispatches[0].error is not None and second.dispatches[0].error is None
 
 
+@pytest.mark.fr("FR9")
 def test_the_backup_is_sent_to_its_own_provider_with_its_own_key(call: Caller) -> None:
     run = Run({OPENAI: [_status(503)], ANTHROPIC: [_answer]}, **_fallbacks(CLAUDE))
     call(run.gate, model=GPT, messages=MSGS)
@@ -60,6 +62,7 @@ def test_the_backup_is_sent_to_its_own_provider_with_its_own_key(call: Caller) -
 
 
 @pytest.mark.usefixtures("delays")
+@pytest.mark.fr("FR7")
 def test_entries_are_tried_strictly_in_order(call: Caller) -> None:
     # Scripts are per host and replayed in call order, so the OpenAI host answers the
     # primary, then gpt-4o-mini, then gpt-4.1, in that order.
@@ -70,6 +73,7 @@ def test_entries_are_tried_strictly_in_order(call: Caller) -> None:
     assert result.metadata is not None and len(result.metadata.attempt_chain) == 4
 
 
+@pytest.mark.fr("FR7")
 def test_a_per_model_list_replaces_the_default(call: Caller) -> None:
     run = Run(
         {OPENAI: [_status(503), _answer], ANTHROPIC: [_answer]},
@@ -80,6 +84,7 @@ def test_a_per_model_list_replaces_the_default(call: Caller) -> None:
     assert _models(run) == [GPT, MINI]
 
 
+@pytest.mark.fr("FR9", "FR12")
 def test_the_primarys_routing_is_exhausted_before_the_first_fallback(
     call: Caller, delays: list[float]
 ) -> None:
@@ -95,6 +100,7 @@ def test_the_primarys_routing_is_exhausted_before_the_first_fallback(
     assert [d.endpoint for d in second.dispatches] == ["anthropic"]
 
 
+@pytest.mark.fr("FR9")
 def test_a_fallback_has_its_own_routing_and_retries_before_the_next_entry(
     call: Caller, delays: list[float]
 ) -> None:
@@ -112,6 +118,7 @@ def test_a_fallback_has_its_own_routing_and_retries_before_the_next_entry(
     assert [len(a.dispatches) for a in result.metadata.attempt_chain] == [1, 2, 1]
 
 
+@pytest.mark.fr("FR9")
 def test_the_primary_is_not_retried_just_because_a_fallback_is_routed(
     call: Caller, delays: list[float]
 ) -> None:
@@ -126,6 +133,7 @@ def test_the_primary_is_not_retried_just_because_a_fallback_is_routed(
 
 
 @pytest.mark.parametrize("failing", ["primary", "fallback"])
+@pytest.mark.fr("FR11")
 def test_a_raise_error_ends_the_chain(call: Caller, failing: str) -> None:
     openai = [_status(400)] if failing == "primary" else [_status(503)]
     anthropic = [_status(400)] if failing == "fallback" else [_answer]
@@ -141,6 +149,7 @@ def test_a_raise_error_ends_the_chain(call: Caller, failing: str) -> None:
         assert type(raised.value.last_error) is errors.BadRequestError
 
 
+@pytest.mark.fr("FR7", "FR12")
 def test_an_advance_error_moves_to_the_fallback_without_a_delay(
     call: Caller, delays: list[float]
 ) -> None:
@@ -151,6 +160,7 @@ def test_an_advance_error_moves_to_the_fallback_without_a_delay(
 
 @pytest.mark.usefixtures("delays")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR11")
 def test_when_everything_fails_the_aggregate_error_holds_every_attempt(
     call: Caller, provider: str
 ) -> None:
@@ -169,6 +179,7 @@ def test_when_everything_fails_the_aggregate_error_holds_every_attempt(
     assert chain[1].dispatches[0].error.type == "RateLimitError"
 
 
+@pytest.mark.fr("FR10")
 def test_a_fallback_that_lacks_a_needed_feature_is_passed_over(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -186,6 +197,7 @@ def test_a_fallback_that_lacks_a_needed_feature_is_passed_over(
     assert "skipped" not in wire[0] and wire[1]["skipped"] == reason
 
 
+@pytest.mark.fr("FR10", "FR11")
 def test_every_incapable_fallback_leaves_a_row_in_the_aggregate_error(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -199,6 +211,7 @@ def test_every_incapable_fallback_leaves_a_row_in_the_aggregate_error(
     assert [a.skipped is None for a in chain] == [True, False]
 
 
+@pytest.mark.fr("FR5", "FR10")
 def test_drop_params_lets_an_incapable_fallback_run_instead_of_being_skipped(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -212,6 +225,7 @@ def test_drop_params_lets_an_incapable_fallback_run_instead_of_being_skipped(
     assert all(a.skipped is None for a in result.metadata.attempt_chain)
 
 
+@pytest.mark.fr("FR10")
 def test_a_skipped_row_reaches_a_streams_final_chunk(
     stream_call: StreamCaller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -224,6 +238,7 @@ def test_a_skipped_row_reaches_a_streams_final_chunk(
     assert [a.skipped is None for a in final.metadata.attempt_chain] == [True, False, True]
 
 
+@pytest.mark.fr("FR10")
 def test_a_skipped_row_reaches_a_stream_that_fails_to_open(
     stream_call: StreamCaller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -234,6 +249,7 @@ def test_a_skipped_row_reaches_a_stream_that_fails_to_open(
     assert [a.skipped is None for a in result.call_error.attempt_chain] == [True, False]
 
 
+@pytest.mark.fr("FR4")
 def test_a_primary_that_lacks_the_feature_raises_first_with_an_empty_chain(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -244,6 +260,7 @@ def test_a_primary_that_lacks_the_feature_raises_first_with_an_empty_chain(
     assert run.sent == [] and raised.value.attempt_chain == []
 
 
+@pytest.mark.fr("FR5")
 def test_the_fallbacks_provider_decides_which_params_are_dropped(call: Caller) -> None:
     run = Run({OPENAI: [_status(503)], ANTHROPIC: [_answer]}, **_fallbacks(CLAUDE))
     result = call(run.gate, model=GPT, messages=MSGS, seed=3, drop_params=True)
@@ -253,6 +270,7 @@ def test_the_fallbacks_provider_decides_which_params_are_dropped(call: Caller) -
 
 
 @pytest.mark.parametrize("failure", ["status", "first_event"])
+@pytest.mark.fr("FR7")
 def test_a_stream_that_fails_before_its_first_chunk_moves_to_the_fallback(
     stream_call: StreamCaller, failure: str
 ) -> None:
@@ -265,6 +283,7 @@ def test_a_stream_that_fails_before_its_first_chunk_moves_to_the_fallback(
     assert final.metadata is not None and len(final.metadata.attempt_chain) == 2
 
 
+@pytest.mark.fr("FR7")
 def test_a_stream_is_never_moved_to_a_fallback_after_its_first_chunk(
     stream_call: StreamCaller,
 ) -> None:
@@ -280,6 +299,7 @@ def test_a_stream_is_never_moved_to_a_fallback_after_its_first_chunk(
     assert len(result.read_error.attempt_chain) == 1
 
 
+@pytest.mark.fr("FR7")
 def test_a_second_fallback_stream_that_fails_early_moves_on_again(
     stream_call: StreamCaller,
 ) -> None:
@@ -300,6 +320,7 @@ def test_a_second_fallback_stream_that_fails_early_moves_on_again(
 
 
 @pytest.mark.parametrize("status", [503, 400])
+@pytest.mark.fr("FR10")
 def test_a_skipped_row_stays_in_place_when_the_next_fallback_fails(
     call: Caller, monkeypatch: pytest.MonkeyPatch, status: int
 ) -> None:
@@ -313,6 +334,7 @@ def test_a_skipped_row_stays_in_place_when_the_next_fallback_fails(
     assert chain[1].model == "anthropic/claude-sonnet-5-5"
 
 
+@pytest.mark.fr("FR10")
 def test_a_skipped_row_stays_in_place_when_a_stream_fails_after_its_first_chunk(
     stream_call: StreamCaller, monkeypatch: pytest.MonkeyPatch
 ) -> None:

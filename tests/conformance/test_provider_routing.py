@@ -27,6 +27,7 @@ def _gate(**kwargs: Any) -> tuple[PrimaGate, list[httpx2.Request]]:
 
 @pytest.mark.parametrize("provider", MODELS)
 @pytest.mark.parametrize("routing", [None, {}], ids=["omitted", "empty"])
+@pytest.mark.fr("FR13")
 def test_with_routing_off_a_failing_call_makes_exactly_one_request(
     call: Caller, provider: str, routing: Any
 ) -> None:
@@ -39,6 +40,8 @@ def test_with_routing_off_a_failing_call_makes_exactly_one_request(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR14")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_setup_rejects_routing_on_without_an_endpoint(provider: str) -> None:
     with pytest.raises(errors.BadRequestError, match=MODELS[provider]):
         PrimaGate(api_keys=KEYS, provider_routing={MODELS[provider]: []})

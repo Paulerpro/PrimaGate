@@ -63,6 +63,7 @@ def _skips(run: Run) -> list[events.AttemptSkipped]:
 
 
 @pytest.mark.usefixtures("delays")
+@pytest.mark.fr("FR30")
 def test_a_failed_small_tier_is_answered_by_medium_after_its_own_routing(call: Caller) -> None:
     routing = {MINI: [{"base_url": B_URL, "api_key": B_KEY}]}
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, provider_routing=routing)
@@ -78,6 +79,7 @@ def test_a_failed_small_tier_is_answered_by_medium_after_its_own_routing(call: C
     assert _skips(run) == []
 
 
+@pytest.mark.fr("FR30")
 def test_a_powerful_tier_that_fails_with_an_advance_error_moves_to_medium(call: Caller) -> None:
     run = Run(["POWERFUL 0.9"], {FOUR: [_status(401)]})
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -86,6 +88,7 @@ def test_a_powerful_tier_that_fails_with_an_advance_error_moves_to_medium(call: 
     assert [a.model for a in result.metadata.attempt_chain] == [f"openai/{FOUR}", f"openai/{GPT}"]
 
 
+@pytest.mark.fr("FR30")
 def test_a_failed_medium_tier_has_no_failover(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"], {GPT: [_status(503)]})
     with pytest.raises(errors.ServiceUnavailableError) as raised:
@@ -94,6 +97,7 @@ def test_a_failed_medium_tier_has_no_failover(call: Caller) -> None:
     assert _skips(run) == []
 
 
+@pytest.mark.fr("FR30")
 def test_medium_not_enabled_leaves_a_skipped_row(call: Caller) -> None:
     policy = {
         **POLICY,
@@ -113,6 +117,7 @@ def test_medium_not_enabled_leaves_a_skipped_row(call: Caller) -> None:
     assert (event.model, event.reason) == (passed.model, passed.skipped)
 
 
+@pytest.mark.fr("FR25", "FR30")
 def test_a_medium_tier_the_filter_removed_leaves_its_filter_reason(call: Caller) -> None:
     bindings = {**THREE, "MEDIUM": {"model": "claude-sonnet-5-5"}}
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, bindings=bindings)
@@ -125,6 +130,7 @@ def test_a_medium_tier_the_filter_removed_leaves_its_filter_reason(call: Caller)
     assert [e.reason for e in _skips(run)] == [passed.skipped]
 
 
+@pytest.mark.fr("FR30")
 def test_a_medium_tier_bound_to_the_failed_model_is_not_run_again(call: Caller) -> None:
     bindings = {**THREE, "MEDIUM": {"model": MINI}}
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, bindings=bindings)
@@ -136,6 +142,7 @@ def test_a_medium_tier_bound_to_the_failed_model_is_not_run_again(call: Caller) 
     assert passed.skipped == "same model as the resolved Tier"
 
 
+@pytest.mark.fr("FR11", "FR30")
 def test_when_both_tiers_fail_the_aggregate_error_holds_both_attempts(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)], GPT: [_status(429)]})
     with pytest.raises(errors.AttemptsExhaustedError) as raised:
@@ -149,6 +156,7 @@ def test_when_both_tiers_fail_the_aggregate_error_holds_both_attempts(call: Call
     assert failed.attempts == 2
 
 
+@pytest.mark.fr("FR12", "FR30")
 def test_the_medium_attempt_has_its_own_retries_and_redundant_endpoints(
     call: Caller, delays: list[float]
 ) -> None:
@@ -165,6 +173,7 @@ def test_the_medium_attempt_has_its_own_retries_and_redundant_endpoints(
     assert [d.retries for d in medium.dispatches] == [2, 0]
 
 
+@pytest.mark.fr("FR30")
 def test_a_raise_error_on_the_resolved_tier_never_fails_over(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(400)]})
     with pytest.raises(errors.BadRequestError) as raised:
@@ -173,6 +182,7 @@ def test_a_raise_error_on_the_resolved_tier_never_fails_over(call: Caller) -> No
     assert _skips(run) == []
 
 
+@pytest.mark.fr("FR30", "FR31")
 def test_a_failover_from_the_interim_binding_is_never_cached(call: Caller) -> None:
     run = Run(["nonsense"], {MINI: [_status(503)]}, policy={**POLICY, "interim_binding": "SMALL"})
     first = call(run.gate, model=ALIAS, messages=MSGS)
@@ -183,6 +193,7 @@ def test_a_failover_from_the_interim_binding_is_never_cached(call: Caller) -> No
     assert run.models == [MINI, GPT, MINI, GPT] and len(run.analyzed) == 2
 
 
+@pytest.mark.fr("FR31")
 def test_a_routed_failover_answer_is_cached_like_any_routed_answer(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]})
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -191,6 +202,7 @@ def test_a_routed_failover_answer_is_cached_like_any_routed_answer(call: Caller)
     assert run.models == [MINI, GPT] and len(run.analyzed) == 1
 
 
+@pytest.mark.fr("FR35")
 def test_the_spend_counts_the_medium_answer_and_the_one_analyzer_cost(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, policy={**POLICY, "spending_ceiling": 1.0})
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -201,6 +213,7 @@ def test_the_spend_counts_the_medium_answer_and_the_one_analyzer_cost(call: Call
     assert run.gate._spend.total == pytest.approx(meta.cost.total + meta.analyzer.cost.total)
 
 
+@pytest.mark.fr("FR30")
 def test_a_plain_model_call_never_fails_over(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]})
     with pytest.raises(errors.ServiceUnavailableError) as raised:
@@ -209,6 +222,7 @@ def test_a_plain_model_call_never_fails_over(call: Caller) -> None:
     assert len(raised.value.attempt_chain) == 1
 
 
+@pytest.mark.fr("FR30")
 def test_the_failover_is_announced_as_the_next_attempt_without_a_new_decision(
     call: Caller,
 ) -> None:
@@ -223,6 +237,7 @@ def test_the_failover_is_announced_as_the_next_attempt_without_a_new_decision(
     assert done.model == f"openai/{GPT}" and done.attempts == 2
 
 
+@pytest.mark.fr("FR30")
 def test_a_medium_tier_that_is_not_bound_at_all_is_named_medium_in_its_row(call: Caller) -> None:
     policy = {**POLICY, "enabled_tiers": ["SMALL"], "interim_binding": "SMALL"}
     run = Run(
@@ -238,6 +253,7 @@ def test_a_medium_tier_that_is_not_bound_at_all_is_named_medium_in_its_row(call:
     assert (event.model, event.reason) == ("MEDIUM", "MEDIUM is not in enabled_tiers")
 
 
+@pytest.mark.fr("FR30")
 def test_the_medium_attempt_drops_what_its_own_limits_cannot_take(call: Caller) -> None:
     bindings = {**THREE, "MEDIUM": {"model": GPT, "limits": {"supported_features": ["streaming"]}}}
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, bindings=bindings)
@@ -259,6 +275,7 @@ def _too_long(provider: str, stream: bool) -> httpx2.Response:
     return httpx2.Response(400, json=body)
 
 
+@pytest.mark.fr("FR30")
 def test_a_context_window_error_on_the_resolved_tier_moves_to_medium(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_too_long]})
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -268,6 +285,7 @@ def test_a_context_window_error_on_the_resolved_tier_moves_to_medium(call: Calle
     assert first.error is not None and first.error.type == "ContextWindowExceededError"
 
 
+@pytest.mark.fr("FR30")
 def test_a_raise_error_on_medium_ends_the_chain_holding_both_attempts(call: Caller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)], GPT: [_status(400)]})
     with pytest.raises(errors.AttemptsExhaustedError) as raised:
@@ -280,6 +298,7 @@ def test_a_raise_error_on_medium_ends_the_chain_holding_both_attempts(call: Call
     assert all(a.skipped is None for a in chain)
 
 
+@pytest.mark.fr("FR30")
 def test_an_interim_binding_of_medium_that_fails_has_no_failover(call: Caller) -> None:
     run = Run(["nonsense"], {GPT: [_status(503)]})
     with pytest.raises(errors.ServiceUnavailableError) as raised:

@@ -36,6 +36,7 @@ CASES: list[tuple[str, Any, str]] = [
 
 
 @pytest.mark.parametrize(("label", "verdict", "reason"), CASES, ids=[c[0] for c in CASES])
+@pytest.mark.fr("FR22")
 def test_a_failing_or_unusable_analyzer_uses_the_interim_binding_once(
     call: Caller, label: str, verdict: Any, reason: str
 ) -> None:
@@ -49,6 +50,7 @@ def test_a_failing_or_unusable_analyzer_uses_the_interim_binding_once(
     assert event.analyzer_prompt_version == "analyzer-1"
 
 
+@pytest.mark.fr("FR22")
 def test_the_events_come_in_order_before_the_dispatch(call: Caller) -> None:
     run = Run(["nonsense"])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -62,6 +64,7 @@ def test_the_events_come_in_order_before_the_dispatch(call: Caller) -> None:
     assert run.of(events.LowConfidenceDowngrade) == []
 
 
+@pytest.mark.fr("FR22")
 def test_a_degraded_event_is_a_warning_with_ids_and_a_fixed_reason_only(call: Caller) -> None:
     run = Run([_down])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -72,17 +75,20 @@ def test_a_degraded_event_is_a_warning_with_ids_and_a_fixed_reason_only(call: Ca
     assert "order" not in str(shown) and "server_error" not in str(shown)
 
 
+@pytest.mark.fr("FR19", "FR20")
 def test_a_malformed_answer_still_reports_what_the_analyzer_cost(call: Caller) -> None:
     result = call(Run(["nonsense"]).gate, model=ALIAS, messages=MSGS)
     assert result.metadata is not None and result.metadata.analyzer is not None
     assert result.metadata.analyzer.cost is not None
 
 
+@pytest.mark.fr("FR19")
 def test_a_failed_request_to_the_analyzer_has_no_cost_line(call: Caller) -> None:
     result = call(Run([_down]).gate, model=ALIAS, messages=MSGS)
     assert result.metadata is not None and result.metadata.analyzer is None
 
 
+@pytest.mark.fr("FR22", "FR26")
 def test_a_latest_turn_over_the_budget_never_asks_the_analyzer(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"], policy={**POLICY, "context_token_budget": 2})
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -92,6 +98,7 @@ def test_a_latest_turn_over_the_budget_never_asks_the_analyzer(call: Caller) -> 
     assert result.metadata is not None and result.metadata.analyzer is None
 
 
+@pytest.mark.fr("FR22")
 def test_a_turn_with_nothing_the_analyzer_can_read_is_degraded(call: Caller) -> None:
     only_image = [
         {
@@ -105,6 +112,7 @@ def test_a_turn_with_nothing_the_analyzer_can_read_is_degraded(call: Caller) -> 
     assert _degraded(run)[0].reason == "no_conversation"
 
 
+@pytest.mark.fr("FR22", "FR25")
 def test_an_answer_naming_a_tier_that_cannot_take_the_request_is_degraded(call: Caller) -> None:
     bindings = {
         "SMALL": {"model": "claude-sonnet-5-5"},
@@ -117,6 +125,7 @@ def test_an_answer_naming_a_tier_that_cannot_take_the_request_is_degraded(call: 
     assert _degraded(run)[0].reason == "tier_not_enabled" and _models(run) == ["gpt-4o"]
 
 
+@pytest.mark.fr("FR22", "FR25")
 def test_an_interim_tier_that_cannot_take_the_request_moves_to_the_nearest_able_one(
     call: Caller,
 ) -> None:
@@ -136,6 +145,7 @@ def test_an_interim_tier_that_cannot_take_the_request_moves_to_the_nearest_able_
     assert _models(run) == ["gpt-4o"] and len(run.analyzed) == 1
 
 
+@pytest.mark.fr("FR22", "FR31")
 def test_a_degraded_answer_is_not_stored_so_the_next_call_asks_again(call: Caller) -> None:
     run = Run(["nonsense"])
     first = call(run.gate, model=ALIAS, messages=MSGS)
@@ -144,6 +154,7 @@ def test_a_degraded_answer_is_not_stored_so_the_next_call_asks_again(call: Calle
     assert len(run.analyzed) == 2 and len(run.workers) == 2 and first.choices
 
 
+@pytest.mark.fr("FR31")
 def test_a_good_answer_is_neither_degraded_nor_kept_from_the_cache(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -152,12 +163,14 @@ def test_a_good_answer_is_neither_degraded_nor_kept_from_the_cache(call: Caller)
     assert again.metadata is not None and again.metadata.cache_hit
 
 
+@pytest.mark.fr("FR20")
 def test_a_below_threshold_answer_is_a_downgrade_not_a_degrade(call: Caller) -> None:
     run = Run(["MEDIUM 0.5"])
     call(run.gate, model=ALIAS, messages=MSGS)
     assert _degraded(run) == [] and len(run.of(events.LowConfidenceDowngrade)) == 1
 
 
+@pytest.mark.fr("FR22")
 def test_a_degraded_stream_opens_on_the_interim_tier(stream_call: StreamCaller) -> None:
     run = Run(["nonsense"])
     result = stream_call(run.gate, model=ALIAS, messages=MSGS)

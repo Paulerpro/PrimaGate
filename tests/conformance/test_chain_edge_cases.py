@@ -74,6 +74,7 @@ EARLY = pytest.mark.parametrize("failure", ["status", "first_event"])
 
 
 @EARLY
+@pytest.mark.fr("FR30")
 def test_a_stream_whose_tier_fails_early_opens_on_medium(
     stream_call: StreamCaller, failure: str
 ) -> None:
@@ -95,6 +96,7 @@ def test_a_stream_whose_tier_fails_early_opens_on_medium(
 
 
 @EARLY
+@pytest.mark.fr("FR7", "FR30")
 def test_a_stream_whose_tier_and_medium_fail_early_comes_from_the_fallback(
     stream_call: StreamCaller, failure: str
 ) -> None:
@@ -111,6 +113,7 @@ def test_a_stream_whose_tier_and_medium_fail_early_comes_from_the_fallback(
     assert _from(result.chunks, F)
 
 
+@pytest.mark.fr("FR30")
 def test_a_skipped_medium_stays_in_the_final_chunks_chain(stream_call: StreamCaller) -> None:
     run = Run(["SMALL 0.9"], {MINI: [_status(503)]}, policy=NO_MEDIUM, default_fallbacks=[F])
     result = stream_call(run.gate, model=ALIAS, messages=MSGS)
@@ -128,6 +131,7 @@ def test_a_skipped_medium_stays_in_the_final_chunks_chain(stream_call: StreamCal
 
 
 @EARLY
+@pytest.mark.fr("FR11", "FR30")
 def test_a_stream_where_every_layer_fails_early_raises_the_aggregate_from_the_call(
     stream_call: StreamCaller, failure: str
 ) -> None:
@@ -143,6 +147,7 @@ def test_a_stream_where_every_layer_fails_early_raises_the_aggregate_from_the_ca
     assert failed.attempts == 3
 
 
+@pytest.mark.fr("FR30")
 def test_a_context_window_error_on_a_streamed_tier_moves_to_medium(
     stream_call: StreamCaller,
 ) -> None:
@@ -156,6 +161,7 @@ def test_a_context_window_error_on_a_streamed_tier_moves_to_medium(
     assert first.error is not None and first.error.type == "ContextWindowExceededError"
 
 
+@pytest.mark.fr("FR30")
 def test_a_context_window_error_on_a_streamed_medium_goes_to_the_fallback_list(
     stream_call: StreamCaller,
 ) -> None:
@@ -167,6 +173,7 @@ def test_a_context_window_error_on_a_streamed_medium_goes_to_the_fallback_list(
     assert meta is not None and meta.tier is None
 
 
+@pytest.mark.fr("FR22", "FR30")
 def test_a_degraded_stream_on_an_interim_medium_goes_straight_to_mediums_list(
     stream_call: StreamCaller,
 ) -> None:
@@ -180,6 +187,7 @@ def test_a_degraded_stream_on_an_interim_medium_goes_straight_to_mediums_list(
     assert [row.model for row in meta.attempt_chain] == [f"openai/{GPT}", f"openai/{F}"]
 
 
+@pytest.mark.fr("FR22", "FR30")
 def test_a_degraded_stream_on_an_interim_small_fails_over_to_medium(
     stream_call: StreamCaller,
 ) -> None:
@@ -195,6 +203,7 @@ def test_a_degraded_stream_on_an_interim_small_fails_over_to_medium(
 # --- streams that fail after their first chunk ---
 
 
+@pytest.mark.fr("FR30")
 def test_a_stream_that_fails_mid_way_on_its_tier_tries_nothing_else(
     stream_call: StreamCaller,
 ) -> None:
@@ -208,6 +217,7 @@ def test_a_stream_that_fails_mid_way_on_its_tier_tries_nothing_else(
     _nothing_after_the_stream_opened(run)
 
 
+@pytest.mark.fr("FR30")
 def test_a_stream_that_fails_mid_way_on_medium_tries_no_fallback(
     stream_call: StreamCaller,
 ) -> None:
@@ -226,6 +236,7 @@ def test_a_stream_that_fails_mid_way_on_medium_tries_no_fallback(
     _nothing_after_the_stream_opened(run)
 
 
+@pytest.mark.fr("FR30")
 def test_a_stream_that_fails_mid_way_on_a_fallback_keeps_the_skipped_medium(
     stream_call: StreamCaller,
 ) -> None:
@@ -259,6 +270,7 @@ def _nothing_after_the_stream_opened(run: Run) -> None:
 # --- final-chunk metadata ---
 
 
+@pytest.mark.fr("FR2", "FR19")
 def test_a_routed_stream_reports_its_tier_and_analyzer_like_a_plain_answer(
     stream_call: StreamCaller,
 ) -> None:
@@ -273,6 +285,7 @@ def test_a_routed_stream_reports_its_tier_and_analyzer_like_a_plain_answer(
 
 
 @pytest.mark.parametrize("script", [{}, {MINI: [_status(503)]}], ids=["chosen", "failover"])
+@pytest.mark.fr("FR2")
 def test_a_routed_streams_final_metadata_matches_the_non_streamed_answers(
     stream_call: StreamCaller, script: dict[str, list[Reply]]
 ) -> None:
@@ -290,6 +303,7 @@ def test_a_routed_streams_final_metadata_matches_the_non_streamed_answers(
     assert {"tier", "analyzer", "attempt_chain", "cost"} <= streamed_fields.keys()
 
 
+@pytest.mark.fr("FR15")
 def test_a_plain_stream_reports_no_tier_or_analyzer(stream_call: StreamCaller) -> None:
     run = Run(["SMALL 0.9"], {})
     result = stream_call(run.gate, model=MINI, messages=MSGS)
@@ -328,6 +342,7 @@ def _analyzer_cost() -> float:
     [(GPT, [MINI], F), (F, [MINI, GPT], D)],
     ids=["medium", "fallback"],
 )
+@pytest.mark.fr("FR27", "FR30")
 def test_cancelling_while_a_later_layer_is_held_dispatches_nothing_more(
     stopper: Stopper, stream: bool, held: str, failing: list[str], unsent: str
 ) -> None:
@@ -347,6 +362,7 @@ def test_cancelling_while_a_later_layer_is_held_dispatches_nothing_more(
     assert run.gate._spend.total == pytest.approx(_analyzer_cost())
 
 
+@pytest.mark.fr("FR27", "FR30")
 def test_a_stream_that_failed_over_and_is_cancelled_mid_way_dispatches_nothing_more(
     stopper: Stopper,
 ) -> None:
@@ -364,6 +380,7 @@ def test_a_stream_that_failed_over_and_is_cancelled_mid_way_dispatches_nothing_m
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.fr("FR27")
 def test_a_deadline_that_passes_in_a_fallbacks_retry_wait_stops_the_chain(
     clock: Clock, mode: str, stream: bool
 ) -> None:

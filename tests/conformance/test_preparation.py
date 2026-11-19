@@ -140,6 +140,7 @@ def _prep(mode: str, replies: list[Reply], **kwargs: Any) -> Prep:
     return Prep(mode, replies, **kwargs)
 
 
+@pytest.mark.fr("FR23")
 def test_a_valid_answer_is_stored_and_reported_ready(mode: str, delays: list[float]) -> None:
     run = _prep(mode, [GOOD])
     result = run.prepare()
@@ -152,6 +153,7 @@ def test_a_valid_answer_is_stored_and_reported_ready(mode: str, delays: list[flo
     assert SECRET in sent["messages"][1]["content"]
 
 
+@pytest.mark.fr("FR24")
 def test_the_stored_profile_has_its_prep_id_and_utc_time(mode: str) -> None:
     run = _prep(mode, [GOOD])
     profile = run.prepare().profile
@@ -167,6 +169,7 @@ def test_the_stored_profile_has_its_prep_id_and_utc_time(mode: str) -> None:
     assert ready.profile_id == profile.profile_id
 
 
+@pytest.mark.fr("FR23")
 def test_every_preparation_event_has_a_prep_request_id(mode: str, delays: list[float]) -> None:
     run = _prep(mode, ["prose", GOOD])
     run.prepare()
@@ -175,6 +178,7 @@ def test_every_preparation_event_has_a_prep_request_id(mode: str, delays: list[f
     assert all(e.timestamp for e in run.handler.seen)
 
 
+@pytest.mark.fr("FR24")
 def test_oversized_sources_fail_without_a_dispatch(mode: str) -> None:
     run = _prep(mode, [], profile_sources={"instructions": "word " * 20_000})
     result = run.prepare()
@@ -183,6 +187,7 @@ def test_oversized_sources_fail_without_a_dispatch(mode: str) -> None:
     assert run.failures() == [("overflow", 0, True)]
 
 
+@pytest.mark.fr("FR23")
 def test_a_malformed_answer_then_a_valid_one_is_ready(mode: str, delays: list[float]) -> None:
     run = _prep(mode, ["Here is your profile.", GOOD])
     assert run.prepare().state is PrepState.READY
@@ -191,6 +196,7 @@ def test_a_malformed_answer_then_a_valid_one_is_ready(mode: str, delays: list[fl
     assert delays == [1.0]
 
 
+@pytest.mark.fr("FR23")
 def test_a_503_three_times_fails_with_no_write(mode: str, delays: list[float]) -> None:
     run = _prep(mode, [_status(503)] * 3)
     assert run.prepare() == Prepared(PrepState.FAILED, None)
@@ -202,6 +208,7 @@ def test_a_503_three_times_fails_with_no_write(mode: str, delays: list[float]) -
     ]
 
 
+@pytest.mark.fr("FR23")
 def test_a_401_fails_after_one_attempt(mode: str, delays: list[float]) -> None:
     run = _prep(mode, [_status(401)])
     assert run.prepare().state is PrepState.FAILED
@@ -217,6 +224,7 @@ def test_a_401_fails_after_one_attempt(mode: str, delays: list[float]) -> None:
     ],
     ids=["missing_unknowns", "empty_content"],
 )
+@pytest.mark.fr("FR24")
 def test_content_the_profile_rules_refuse_is_malformed(
     mode: str, delays: list[float], reply: dict[str, Any]
 ) -> None:
@@ -226,6 +234,7 @@ def test_content_the_profile_rules_refuse_is_malformed(
     assert run.stored is None
 
 
+@pytest.mark.fr("FR23")
 def test_preparation_dispatches_even_when_the_cap_is_full(mode: str) -> None:
     run = _prep(mode, [GOOD], policy={**POLICY, "max_concurrent_analyzer_calls": 1})
     cap = run.gate._analyzer_cap
@@ -234,6 +243,7 @@ def test_preparation_dispatches_even_when_the_cap_is_full(mode: str) -> None:
     assert len(run.prepared) == 1 and cap.in_flight == 1
 
 
+@pytest.mark.fr("FR35")
 def test_each_attempts_cost_is_counted_against_the_ceiling(mode: str, delays: list[float]) -> None:
     run = _prep(mode, ["prose", GOOD], policy={**POLICY, "spending_ceiling": 0.0001})
     run.prepare()
@@ -243,6 +253,7 @@ def test_each_attempts_cost_is_counted_against_the_ceiling(mode: str, delays: li
     assert warning.request_id.startswith("prep-")
 
 
+@pytest.mark.fr("FR38")
 def test_no_event_or_log_line_holds_sources_or_the_reply(
     mode: str, delays: list[float], caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -255,6 +266,7 @@ def test_no_event_or_log_line_holds_sources_or_the_reply(
     assert "preparation_failed" in caplog.text and "profile_ready" in caplog.text
 
 
+@pytest.mark.fr("FR23")
 def test_prepare_without_an_analyzer_is_rejected(mode: str) -> None:
     one_tier = {**POLICY, "enabled_tiers": ["MEDIUM"], "ambiguous_context_default": "MEDIUM"}
     run = Prep(mode, [], policy=one_tier, analyzer=None)
@@ -266,6 +278,7 @@ def test_prepare_without_an_analyzer_is_rejected(mode: str) -> None:
     assert run.prepared == [] and run.others == []
 
 
+@pytest.mark.fr("FR23")
 def test_a_preparation_on_a_closed_instance_stops_before_its_first_step(mode: str) -> None:
     run = _prep(mode, [GOOD])
     sync_driver, async_driver = run.gate._get_driver(), run.gate._get_async_driver()
@@ -281,6 +294,8 @@ def test_a_preparation_on_a_closed_instance_stops_before_its_first_step(mode: st
     assert run.prepared == [] and run.stored is None and run.types == []
 
 
+@pytest.mark.fr("FR23")
+@pytest.mark.mode_independent("drives the sync and the async driver in one body")
 def test_a_driver_without_tier_routing_cannot_prepare() -> None:
     from primagate.drivers.async_ import AsyncDriver
     from primagate.drivers.sync import SyncDriver
@@ -309,6 +324,7 @@ class FailingStore(InMemoryProfileStore):
 
 
 @pytest.mark.parametrize("non_blocking", [True, False])
+@pytest.mark.fr("FR23")
 def test_a_store_error_reaches_the_caller_unchanged(mode: str, non_blocking: bool) -> None:
     run = _prep(mode, [GOOD], profile_store=FailingStore(non_blocking))
     with pytest.raises(Broken, match="store is down"):
@@ -316,6 +332,7 @@ def test_a_store_error_reaches_the_caller_unchanged(mode: str, non_blocking: boo
     assert "preparation_started" in run.types and "profile_ready" not in run.types
 
 
+@pytest.mark.fr("FR33")
 def test_an_unpriced_analyzer_reports_its_cost_as_unknown(mode: str) -> None:
     run = _prep(mode, [GOOD], analyzer="unpriced-local-model")
     assert run.prepare().state is PrepState.READY
@@ -325,6 +342,7 @@ def test_an_unpriced_analyzer_reports_its_cost_as_unknown(mode: str) -> None:
     assert run.types.index("cost_unknown") < run.types.index("profile_ready")
 
 
+@pytest.mark.fr("FR33")
 def test_a_priced_analyzer_reports_no_unknown_cost(mode: str) -> None:
     run = _prep(mode, [GOOD])
     run.prepare()
@@ -336,6 +354,7 @@ def _context_exceeded() -> httpx2.Response:
     return httpx2.Response(400, json={"error": {**error, "code": "context_length_exceeded"}})
 
 
+@pytest.mark.fr("FR24")
 def test_a_context_window_error_is_a_final_overflow(mode: str, delays: list[float]) -> None:
     run = _prep(mode, [_context_exceeded])
     assert run.prepare() == Prepared(PrepState.FAILED, None)
@@ -343,6 +362,7 @@ def test_a_context_window_error_is_a_final_overflow(mode: str, delays: list[floa
     assert run.failures() == [("overflow", 1, True)]
 
 
+@pytest.mark.fr("FR24")
 def test_a_context_window_error_after_a_retry_names_its_attempt(
     mode: str, delays: list[float]
 ) -> None:

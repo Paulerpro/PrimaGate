@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -173,6 +174,7 @@ def _joined(chunks: list[Any], field_name: str) -> str:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_text_stream_ends_with_finish_reason_and_usage(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -191,6 +193,7 @@ def test_text_stream_ends_with_finish_reason_and_usage(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_tool_call_deltas_join_to_the_call(stream_call: StreamCaller, provider: str) -> None:
     gate, _ = _gate(_ok("tools"))
     run = stream_call(gate, model=MODELS[provider], messages=MSGS, tools=TOOLS)
@@ -204,6 +207,7 @@ def test_tool_call_deltas_join_to_the_call(stream_call: StreamCaller, provider: 
 
 
 @pytest.mark.parametrize("kind", ["text", "tools"])
+@pytest.mark.fr("FR1", "FR2")
 def test_chunk_shape_is_identical_across_providers(stream_call: StreamCaller, kind: str) -> None:
     gate, _ = _gate(_ok(kind))
     runs = {p: stream_call(gate, model=m, messages=MSGS, tools=TOOLS) for p, m in MODELS.items()}
@@ -213,6 +217,7 @@ def test_chunk_shape_is_identical_across_providers(stream_call: StreamCaller, ki
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_http_error_before_the_first_chunk_raises_from_the_call(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -224,6 +229,7 @@ def test_http_error_before_the_first_chunk_raises_from_the_call(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_in_band_error_as_first_event_raises_from_the_call(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -234,6 +240,7 @@ def test_in_band_error_as_first_event_raises_from_the_call(
     assert run.chunks == []
 
 
+@pytest.mark.fr("FR2")
 def test_anthropic_error_right_after_message_start_is_still_before_the_first_chunk(
     stream_call: StreamCaller,
 ) -> None:
@@ -245,6 +252,7 @@ def test_anthropic_error_right_after_message_start_is_still_before_the_first_chu
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_error_after_the_first_chunk_ends_the_stream_with_one_error(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -263,6 +271,7 @@ def test_error_after_the_first_chunk_ends_the_stream_with_one_error(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_stream_without_a_terminal_event_raises_api_error(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -273,6 +282,7 @@ def test_stream_without_a_terminal_event_raises_api_error(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_closing_early_releases_the_stream_without_error(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -289,16 +299,35 @@ def test_provider_key_echoed_in_a_stream_error_is_redacted(stream_call: StreamCa
     assert "sk-o" not in run.call_error.message
 
 
-@pytest.mark.parametrize("provider", MODELS)
-def test_reading_after_close_ends_quietly(provider: str) -> None:
-    gate, _ = _gate(_ok("text"))
-    stream = gate.completion(stream=True, model=MODELS[provider], messages=MSGS)
-    next(stream)
-    stream.close()
-    assert list(stream) == []
+def _close_then_read(gate: PrimaGate, mode: str, model: str, *, read_first: bool) -> list[Any]:
+    """Close a stream, optionally after one chunk, and return whatever reading it still gives."""
+    if mode == "sync":
+        stream = gate.completion(stream=True, model=model, messages=MSGS)
+        if read_first:
+            next(stream)
+        stream.close()
+        return list(stream)
+
+    async def go() -> list[Any]:
+        stream = await gate.acompletion(stream=True, model=model, messages=MSGS)
+        if read_first:
+            await anext(stream)
+        await stream.aclose()
+        return [chunk async for chunk in stream]
+
+    return asyncio.run(go())
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
+def test_reading_after_close_ends_quietly(mode: str, provider: str) -> None:
+    gate, _ = _gate(_ok("text"))
+    assert _close_then_read(gate, mode, MODELS[provider], read_first=True) == []
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.fr("FR2")
 def test_module_level_functions_stream(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
@@ -319,14 +348,15 @@ def test_module_level_functions_stream(mode: str, monkeypatch: pytest.MonkeyPatc
     assert _joined(chunks, "content") == "Hello"
 
 
-def test_close_before_the_first_read_ends_the_stream() -> None:
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.fr("FR2")
+def test_close_before_the_first_read_ends_the_stream(mode: str) -> None:
     gate, _ = _gate(_ok("text"))
-    stream = gate.completion(stream=True, model="gpt-4o", messages=MSGS)
-    stream.close()
-    assert list(stream) == []
+    assert _close_then_read(gate, mode, "gpt-4o", read_first=False) == []
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_timeout_after_the_first_chunk_is_a_timeout(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -344,6 +374,7 @@ def test_timeout_after_the_first_chunk_is_a_timeout(
     assert isinstance(run.read_error, errors.Timeout)
 
 
+@pytest.mark.fr("FR2")
 def test_keep_alive_events_are_ignored(stream_call: StreamCaller) -> None:
     for provider, body in (("openai", OPENAI_TEXT), ("anthropic", ANTHROPIC_TEXT)):
         padded = b"data: \n\n" + body
@@ -354,6 +385,7 @@ def test_keep_alive_events_are_ignored(stream_call: StreamCaller) -> None:
         assert run.call_error is None and _joined(run.chunks, "content") == "Hello"
 
 
+@pytest.mark.fr("FR2")
 def test_openai_in_band_rate_limit_keeps_its_class(stream_call: StreamCaller) -> None:
     content = sse((None, {"error": {"message": "slow", "code": "rate_limit_exceeded"}}))
     gate, _ = _gate(lambda p: httpx2.Response(200, content=content, headers=HEADERS))
@@ -361,6 +393,7 @@ def test_openai_in_band_rate_limit_keeps_its_class(stream_call: StreamCaller) ->
     assert isinstance(run.call_error, errors.RateLimitError)
 
 
+@pytest.mark.fr("FR2")
 def test_openai_rejects_streaming_with_several_choices(stream_call: StreamCaller) -> None:
     gate, sent = _gate(_ok("text"))
     run = stream_call(gate, model="gpt-4o", messages=MSGS, n=2)

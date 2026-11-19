@@ -140,6 +140,7 @@ def _plain(script: dict[str, list[Reply]], **kwargs: Any) -> tuple[Run, Recorder
 # --- routing ---
 
 
+@pytest.mark.fr("FR27", "FR28")
 def test_cancelling_while_the_analyzer_is_asked_sends_no_worker_and_frees_the_permit(
     stopper: Stopper,
 ) -> None:
@@ -157,12 +158,14 @@ def test_cancelling_while_the_analyzer_is_asked_sends_no_worker_and_frees_the_pe
     assert cap is not None and cap.in_flight == 0
 
 
+@pytest.mark.fr("FR27")
 def test_a_stream_cancelled_while_routing_never_opens(stopper: Stopper) -> None:
     run = Routed([lambda: stopper.stop_with(_analyzer_reply("SMALL 0.9"))])
     stopper.call(run.gate, model=TIER_ROUTING_ALIAS, messages=MSGS, stream=True)
     assert run.workers == [] and run.handler.types == ["call_cancelled"]
 
 
+@pytest.mark.fr("FR23", "FR27")
 def test_a_cancelled_call_does_not_stop_the_preparation_it_started(mode: str) -> None:
     run = Background(mode, [GOOD])
     token = CancelToken()
@@ -195,6 +198,7 @@ def mode(request: pytest.FixtureRequest) -> str:
 # --- before the start, and between the steps of one model ---
 
 
+@pytest.mark.fr("FR27")
 def test_a_token_already_set_stops_the_call_before_anything_is_sent(mode: str) -> None:
     run, handler = _plain({OPENAI: [_answer]})
     token = CancelToken()
@@ -210,6 +214,7 @@ def test_a_token_already_set_stops_the_call_before_anything_is_sent(mode: str) -
     assert handler.types == ["call_cancelled"]
 
 
+@pytest.mark.fr("FR27")
 def test_cancelling_during_a_failed_dispatch_sends_no_retry(stopper: Stopper) -> None:
     def failing(provider: str, stream: bool) -> Any:
         return stopper.stop_with(_status(503)(provider, stream))
@@ -224,6 +229,7 @@ def test_cancelling_during_a_failed_dispatch_sends_no_retry(stopper: Stopper) ->
     assert "retry_scheduled" not in handler.types
 
 
+@pytest.mark.fr("FR27")
 def test_cancelling_between_fallbacks_tries_no_further_entry(stopper: Stopper) -> None:
     def refused(provider: str, stream: bool) -> Any:
         return stopper.stop_with(_status(401)(provider, stream))
@@ -238,6 +244,7 @@ def test_cancelling_between_fallbacks_tries_no_further_entry(stopper: Stopper) -
     assert "attempt_skipped" not in handler.types
 
 
+@pytest.mark.fr("FR27", "FR31")
 def test_an_answer_that_arrives_after_the_cancel_is_never_cached(stopper: Stopper) -> None:
     def answered(provider: str, stream: bool) -> Any:
         return stopper.stop_with(_answer(provider, stream))
@@ -250,6 +257,7 @@ def test_an_answer_that_arrives_after_the_cancel_is_never_cached(stopper: Stoppe
     assert run.hosts == [OPENAI, OPENAI]
 
 
+@pytest.mark.fr("FR27")
 def test_a_token_set_after_the_answer_arrived_stops_before_the_cache_write(mode: str) -> None:
     token = CancelToken()
     handler = Recorder()
@@ -271,6 +279,8 @@ def test_a_token_set_after_the_answer_arrived_stops_before_the_cache_write(mode:
     assert again.metadata is not None and not again.metadata.cache_hit
 
 
+@pytest.mark.fr("FR27")
+@pytest.mark.mode_independent("asserts how async mode surfaces a token set mid-call")
 def test_a_token_set_mid_call_in_async_raises_the_sdk_error_at_the_next_step() -> None:
     token = CancelToken()
 
@@ -297,6 +307,7 @@ def _call(mode: str, gate: PrimaGate, **params: Any) -> Any:
 
 
 @pytest.mark.parametrize("when", ["during_the_dispatch", "on_call_failed"])
+@pytest.mark.fr("FR27")
 def test_a_token_set_once_the_call_has_failed_never_hides_the_error(mode: str, when: str) -> None:
     token = CancelToken()
     handler = Recorder()
@@ -317,6 +328,7 @@ def test_a_token_set_once_the_call_has_failed_never_hides_the_error(mode: str, w
     assert handler.types == ["dispatch_started", "dispatch_failed", "call_failed"]
 
 
+@pytest.mark.fr("FR27")
 def test_without_a_cache_write_a_token_set_on_success_still_returns_the_answer(mode: str) -> None:
     token = CancelToken()
     handler = Recorder()
@@ -357,6 +369,7 @@ def _routed_total(mode: str, cancel_on: str | None) -> tuple[float, Routed]:
     return run.gate._spend.total, run
 
 
+@pytest.mark.fr("FR27", "FR35")
 def test_a_call_cancelled_after_its_answer_still_counts_what_it_cost(mode: str) -> None:
     finished, _ = _routed_total(mode, None)
     cancelled, run = _routed_total(mode, "call_succeeded")
@@ -364,6 +377,7 @@ def test_a_call_cancelled_after_its_answer_still_counts_what_it_cost(mode: str) 
     assert run.handler.types[-2:] == ["call_succeeded", "call_cancelled"]
 
 
+@pytest.mark.fr("FR27", "FR35")
 def test_a_call_cancelled_after_the_analyzer_answered_counts_the_analyzer(mode: str) -> None:
     cancelled, run = _routed_total(mode, "routing_decision")
     assert run.workers == [] and len(run.analyzed) == 1
@@ -375,6 +389,8 @@ def test_a_call_cancelled_after_the_analyzer_answered_counts_the_analyzer(mode: 
     assert cancelled == pytest.approx(analyzer.cost.total) and cancelled > 0
 
 
+@pytest.mark.fr("FR27")
+@pytest.mark.mode_independent("races two real threads, which needs the blocking sync driver")
 def test_one_shared_token_stops_every_call_given_it() -> None:
     token = CancelToken()
     inside = threading.Barrier(3)
@@ -450,6 +466,7 @@ def stand_in_clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
     return stand_in
 
 
+@pytest.mark.fr("FR27")
 def test_a_deadline_that_passes_during_a_retry_wait_stops_before_the_retry(
     mode: str, clock: Clock
 ) -> None:
@@ -465,6 +482,8 @@ def test_a_deadline_that_passes_during_a_retry_wait_stops_before_the_retry(
     assert clock.now > 1000.5
 
 
+@pytest.mark.fr("FR27")
+@pytest.mark.mode_independent("task cancellation exists only in async mode")
 def test_a_task_cancelled_in_its_retry_wait_sends_no_retry() -> None:
     run, handler = _plain(
         {OPENAI: [_status(503), _answer]},
@@ -518,6 +537,7 @@ def _paced(provider: str, stream: bool) -> httpx2.Response:
     return httpx2.Response(200, stream=Paced([p.encode() for p in parts]), headers=SSE)
 
 
+@pytest.mark.fr("FR27")
 def test_a_stream_cancelled_between_chunks_yields_no_more_and_closes(stopper: Stopper) -> None:
     run, handler = _plain({OPENAI: [_paced]})
     chunks = stopper.read(run.gate, model=GPT, messages=MSGS)
@@ -527,6 +547,7 @@ def test_a_stream_cancelled_between_chunks_yields_no_more_and_closes(stopper: St
     assert handler.types == ["dispatch_started", "call_cancelled"]
 
 
+@pytest.mark.fr("FR27")
 def test_a_token_set_between_chunks_stops_the_stream_in_either_mode(mode: str) -> None:
     run, handler = _plain({OPENAI: [_paced]})
     token = CancelToken()
@@ -553,6 +574,7 @@ def test_a_token_set_between_chunks_stops_the_stream_in_either_mode(mode: str) -
     assert handler.types == ["dispatch_started", "call_cancelled"]
 
 
+@pytest.mark.fr("FR27")
 def test_a_deadline_that_passes_between_chunks_stops_the_stream(mode: str, clock: Clock) -> None:
     run, handler = _plain({OPENAI: [_paced]})
     chunks: list[Any] = []
@@ -581,6 +603,7 @@ def test_a_deadline_that_passes_between_chunks_stops_the_stream(mode: str, clock
 
 
 @pytest.mark.parametrize("settings", [{}, {"cancel": CancelToken(), "deadline": 600}])
+@pytest.mark.fr("FR27")
 def test_a_call_that_is_not_cancelled_behaves_as_before(
     mode: str, settings: dict[str, Any]
 ) -> None:
@@ -593,6 +616,8 @@ def test_a_call_that_is_not_cancelled_behaves_as_before(
     assert handler.types == ["dispatch_started", "call_succeeded"]
 
 
+@pytest.mark.fr("FR27")
+@pytest.mark.mode_independent("exercises the token alone; makes no call")
 def test_one_token_can_be_cancelled_from_another_thread() -> None:
     token = CancelToken()
     assert not token.cancelled
@@ -621,6 +646,7 @@ def test_one_token_can_be_cancelled_from_another_thread() -> None:
     ],
 )
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.fr("FR27")
 def test_bad_cancellation_settings_are_refused_before_anything_is_sent(
     mode: str, bad: dict[str, Any], stream: bool
 ) -> None:
@@ -634,6 +660,7 @@ def test_bad_cancellation_settings_are_refused_before_anything_is_sent(
     assert run.sent == [] and handler.seen == []
 
 
+@pytest.mark.mode_independent("checks the package exports; makes no call")
 def test_the_token_and_the_error_are_exported_from_the_package_root() -> None:
     assert primagate.CancelToken is CancelToken
     assert primagate.CancelledError is errors.CancelledError
@@ -642,6 +669,8 @@ def test_the_token_and_the_error_are_exported_from_the_package_root() -> None:
     assert {"CancelToken", "CancelledError", "CallCancelled"} <= set(primagate.__all__)
 
 
+@pytest.mark.fr("FR27")
+@pytest.mark.mode_independent("calls both module-level functions in one body")
 def test_the_module_level_functions_take_the_settings_too(monkeypatch: pytest.MonkeyPatch) -> None:
     from primagate import client as client_module
 

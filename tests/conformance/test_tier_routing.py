@@ -87,6 +87,7 @@ class Run:
         return [e for e in self.handler.seen if isinstance(e, kind)]
 
 
+@pytest.mark.fr("FR18", "FR36")
 def test_the_analyzers_tier_gets_the_call_and_the_decision_is_logged(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -103,6 +104,7 @@ def test_the_analyzers_tier_gets_the_call_and_the_decision_is_logged(call: Calle
     assert result.metadata is not None and result.metadata.tier == "MEDIUM"
 
 
+@pytest.mark.fr("FR19")
 def test_the_response_shows_the_analyzer_cost_apart_from_the_workers(call: Caller) -> None:
     result = call(Run(["MEDIUM 0.9"]).gate, model=ALIAS, messages=MSGS)
     assert result.metadata is not None and result.metadata.analyzer is not None
@@ -113,6 +115,7 @@ def test_the_response_shows_the_analyzer_cost_apart_from_the_workers(call: Calle
     assert result.metadata.cost != line.cost
 
 
+@pytest.mark.fr("FR20", "FR36")
 def test_a_below_threshold_answer_takes_the_default_and_says_so(call: Caller) -> None:
     run = Run(["MEDIUM 0.5"])
     result = call(run.gate, model=ALIAS, messages=MSGS)
@@ -122,6 +125,27 @@ def test_a_below_threshold_answer_takes_the_default_and_says_so(call: Caller) ->
     assert result.metadata is not None and result.metadata.tier == "SMALL"
 
 
+@pytest.mark.fr("FR20")
+def test_a_confidence_exactly_at_the_threshold_uses_the_analyzers_tier(call: Caller) -> None:
+    run = Run(["MEDIUM 0.8"])
+    result = call(run.gate, model=ALIAS, messages=MSGS)
+    assert [w["model"] for w in run.workers] == ["gpt-4o"]
+    assert result.metadata is not None and result.metadata.tier == "MEDIUM"
+    assert run.of(events.LowConfidenceDowngrade) == []
+
+
+@pytest.mark.fr("FR20", "FR36")
+def test_a_well_formed_answer_under_a_higher_threshold_takes_the_ambiguous_default(
+    call: Caller,
+) -> None:
+    run = Run(["MEDIUM 0.82"], policy={**POLICY, "confidence_threshold": 0.9})
+    result = call(run.gate, model=ALIAS, messages=MSGS)
+    assert [w["model"] for w in run.workers] == ["gpt-4o-mini"]
+    assert result.metadata is not None and result.metadata.tier == "SMALL"
+    assert len(run.of(events.LowConfidenceDowngrade)) == 1 and len(run.decisions) == 1
+
+
+@pytest.mark.fr("FR36")
 def test_a_tier_above_the_cheapest_eligible_is_logged_as_premium(call: Caller) -> None:
     run = Run(["MEDIUM 0.95"])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -129,12 +153,14 @@ def test_a_tier_above_the_cheapest_eligible_is_logged_as_premium(call: Caller) -
     assert run.of(events.LowConfidenceDowngrade) == []
 
 
+@pytest.mark.fr("FR36")
 def test_the_cheapest_tier_is_not_premium(call: Caller) -> None:
     run = Run(["SMALL 0.95"])
     call(run.gate, model=ALIAS, messages=MSGS)
     assert run.of(events.PremiumRoutingSelected) == []
 
 
+@pytest.mark.fr("FR36", "FR38")
 def test_events_come_before_the_dispatch_and_never_hold_content(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -144,6 +170,7 @@ def test_events_come_before_the_dispatch_and_never_hold_content(call: Caller) ->
         assert "order" not in json.dumps(event.to_dict())
 
 
+@pytest.mark.fr("FR18")
 def test_a_tool_loop_makes_one_decision_per_step_each_with_its_own_tier(call: Caller) -> None:
     run = Run(["SMALL 0.9", "MEDIUM 0.9", "SMALL 0.95"], cache_max_entries=1)
     for step in range(3):
@@ -156,6 +183,7 @@ def test_a_tool_loop_makes_one_decision_per_step_each_with_its_own_tier(call: Ca
     assert len(run.analyzed) == 3
 
 
+@pytest.mark.fr("FR18", "FR25")
 def test_one_eligible_tier_skips_the_analyzer_but_is_still_logged(call: Caller) -> None:
     one = Run(
         ["MEDIUM 0.9"],
@@ -174,6 +202,7 @@ def test_one_eligible_tier_skips_the_analyzer_but_is_still_logged(call: Caller) 
     assert one.decisions[0].analyzer_prompt_version == "unknown"
 
 
+@pytest.mark.fr("FR25")
 def test_only_tiers_that_can_take_the_request_are_offered_and_a_filtered_default_moves_up(
     call: Caller,
 ) -> None:
@@ -192,6 +221,7 @@ def test_only_tiers_that_can_take_the_request_are_offered_and_a_filtered_default
     assert [w["model"] for w in run.workers] == ["gpt-4o"]
 
 
+@pytest.mark.fr("FR25")
 def test_a_filtered_default_with_nothing_stronger_falls_back_to_the_strongest_able(
     call: Caller,
 ) -> None:
@@ -212,11 +242,14 @@ def test_a_filtered_default_with_nothing_stronger_falls_back_to_the_strongest_ab
     assert [w["model"] for w in run.workers] == ["gpt-4o"]
 
 
+@pytest.mark.fr("FR19")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_an_analyzer_name_is_trimmed_at_setup() -> None:
     gate = PrimaGate(tier_bindings=TWO, policy=POLICY, analyzer="  gpt-4o-mini ")
     assert gate._tier_routing is not None and gate._tier_routing.analyzer == "gpt-4o-mini"
 
 
+@pytest.mark.fr("FR31")
 def test_a_repeat_is_answered_from_memory_without_asking_the_analyzer_again(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     call(run.gate, model=ALIAS, messages=MSGS)
@@ -226,6 +259,7 @@ def test_a_repeat_is_answered_from_memory_without_asking_the_analyzer_again(call
     assert second.metadata.tier is None and second.metadata.analyzer is None
 
 
+@pytest.mark.fr("FR26")
 def test_the_analyzer_sees_the_bounded_conversation_not_the_system_prompt(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     messages = [
@@ -246,6 +280,7 @@ def test_the_analyzer_sees_the_bounded_conversation_not_the_system_prompt(call: 
     ]
 
 
+@pytest.mark.fr("FR24")
 def test_the_policy_in_force_when_the_call_starts_is_the_one_it_uses(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
 
@@ -261,6 +296,7 @@ def test_the_policy_in_force_when_the_call_starts_is_the_one_it_uses(call: Calle
     assert result.metadata is not None and result.metadata.tier == "MEDIUM"
 
 
+@pytest.mark.fr("FR18")
 def test_a_stream_asks_the_analyzer_then_opens_on_the_chosen_tier(
     stream_call: StreamCaller,
 ) -> None:
@@ -270,6 +306,7 @@ def test_a_stream_asks_the_analyzer_then_opens_on_the_chosen_tier(
     assert len(run.analyzed) == 1 and [w["model"] for w in run.workers] == ["gpt-4o"]
 
 
+@pytest.mark.fr("FR15")
 def test_the_alias_as_a_plain_call_still_never_asks_the_analyzer(call: Caller) -> None:
     run = Run(["MEDIUM 0.9"])
     plain = call(run.gate, model="gpt-4o", messages=MSGS)
@@ -278,22 +315,30 @@ def test_the_alias_as_a_plain_call_still_never_asks_the_analyzer(call: Caller) -
     assert plain.metadata.analyzer is None
 
 
+@pytest.mark.fr("FR19")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_two_enabled_tiers_need_an_analyzer_at_setup() -> None:
     with pytest.raises(errors.BadRequestError, match="analyzer"):
         PrimaGate(tier_bindings=TWO, policy=POLICY)
 
 
+@pytest.mark.fr("FR19")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_one_enabled_tier_may_leave_the_analyzer_out() -> None:
     one = {**POLICY, "enabled_tiers": ["MEDIUM"], "ambiguous_context_default": "MEDIUM"}
     PrimaGate(tier_bindings=TWO, policy=one)
 
 
 @pytest.mark.parametrize("bad", [ALIAS, "", "  ", 5, "nope/model", "openai/"])
+@pytest.mark.fr("FR19")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_a_bad_analyzer_is_refused_at_setup(bad: Any) -> None:
     with pytest.raises(errors.BadRequestError):
         PrimaGate(tier_bindings=TWO, policy=POLICY, analyzer=bad)
 
 
+@pytest.mark.fr("FR19")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_an_analyzer_with_no_policy_is_refused() -> None:
     with pytest.raises(errors.BadRequestError, match="policy"):
         PrimaGate(analyzer="gpt-4o-mini")

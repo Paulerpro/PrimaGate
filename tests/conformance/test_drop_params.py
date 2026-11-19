@@ -107,6 +107,7 @@ def bare_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("bare_adapters")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR4", "FR5")
 def test_true_never_drops_a_behavior_feature(call: Caller, provider: str) -> None:
     gate, sent = _gate()
     with pytest.raises(errors.UnsupportedParamsError):
@@ -116,6 +117,7 @@ def test_true_never_drops_a_behavior_feature(call: Caller, provider: str) -> Non
 
 @pytest.mark.usefixtures("bare_adapters")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR5", "FR6")
 def test_named_features_are_dropped_and_recorded(call: Caller, provider: str) -> None:
     gate, sent = _gate()
     result = call(
@@ -134,6 +136,7 @@ def test_named_features_are_dropped_and_recorded(call: Caller, provider: str) ->
 
 
 @pytest.mark.usefixtures("bare_adapters")
+@pytest.mark.fr("FR5")
 def test_an_image_only_message_becomes_empty_text(call: Caller) -> None:
     gate, sent = _gate()
     messages = [{"role": "user", "content": [IMAGE_PART]}]
@@ -141,6 +144,7 @@ def test_an_image_only_message_becomes_empty_text(call: Caller) -> None:
     assert sent[0]["messages"][0]["content"] == ""
 
 
+@pytest.mark.fr("FR5")
 def test_supported_named_features_are_kept(call: Caller) -> None:
     gate, sent = _gate()
     result = call(gate, model="gpt-4o", messages=TEXT, tools=[TOOL], drop_params=["tools"])
@@ -149,6 +153,7 @@ def test_supported_named_features_are_kept(call: Caller) -> None:
 
 
 @pytest.mark.usefixtures("bare_adapters")
+@pytest.mark.fr("FR4", "FR5")
 def test_tool_history_still_raises_when_tools_are_dropped(call: Caller) -> None:
     gate, sent = _gate()
     history = [{"role": "tool", "tool_call_id": "c1", "content": "x"}]
@@ -157,6 +162,7 @@ def test_tool_history_still_raises_when_tools_are_dropped(call: Caller) -> None:
     assert sent == []
 
 
+@pytest.mark.fr("FR5", "FR6")
 def test_hint_params_are_dropped_and_recorded_under_true(call: Caller) -> None:
     gate, sent = _gate()
     result = call(gate, model=MODELS["anthropic"], messages=TEXT, seed=1, n=2, drop_params=True)
@@ -164,6 +170,7 @@ def test_hint_params_are_dropped_and_recorded_under_true(call: Caller) -> None:
     assert result.metadata is not None and result.metadata.dropped_params == ["n", "seed"]
 
 
+@pytest.mark.fr("FR5")
 def test_hint_params_still_raise_without_the_opt_in(call: Caller) -> None:
     gate, sent = _gate()
     with pytest.raises(errors.UnsupportedParamsError):
@@ -171,6 +178,7 @@ def test_hint_params_still_raise_without_the_opt_in(call: Caller) -> None:
     assert sent == []
 
 
+@pytest.mark.fr("FR5")
 def test_n_of_one_is_not_a_drop(call: Caller) -> None:
     gate, _ = _gate()
     result = call(gate, model=MODELS["anthropic"], messages=TEXT, n=1, drop_params=True)
@@ -178,6 +186,7 @@ def test_n_of_one_is_not_a_drop(call: Caller) -> None:
 
 
 @pytest.mark.usefixtures("bare_adapters")
+@pytest.mark.fr("FR5")
 def test_per_call_value_beats_init_value(call: Caller) -> None:
     gate, sent = _gate(drop_params=["tools"])
     result = call(gate, model="gpt-4o", messages=TEXT, tools=[TOOL])
@@ -188,6 +197,7 @@ def test_per_call_value_beats_init_value(call: Caller) -> None:
 
 
 @pytest.mark.parametrize("bad", ["tools", ["nope"], 3, [1]])
+@pytest.mark.fr("FR5")
 def test_bad_values_are_rejected(call: Caller, bad: object) -> None:
     gate, sent = _gate()
     with pytest.raises(errors.BadRequestError, match="drop_params"):
@@ -198,6 +208,7 @@ def test_bad_values_are_rejected(call: Caller, bad: object) -> None:
 
 
 @pytest.mark.usefixtures("bare_adapters")
+@pytest.mark.fr("FR5")
 def test_module_level_value_is_read_at_call_time(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -216,6 +227,7 @@ def test_module_level_value_is_read_at_call_time(
 
 @pytest.mark.usefixtures("bare_adapters")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR6")
 def test_streams_carry_dropped_params_on_the_final_chunk(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -231,6 +243,7 @@ def test_streams_carry_dropped_params_on_the_final_chunk(
 
 
 @pytest.mark.parametrize("value", [["tools"], False, []])
+@pytest.mark.fr("FR5")
 def test_hint_params_are_not_dropped_without_true(call: Caller, value: object) -> None:
     gate, sent = _gate()
     with pytest.raises(errors.UnsupportedParamsError):
@@ -238,6 +251,7 @@ def test_hint_params_are_not_dropped_without_true(call: Caller, value: object) -
     assert sent == []
 
 
+@pytest.mark.fr("FR5")
 def test_n_below_two_is_not_a_hint_drop(call: Caller) -> None:
     gate, sent = _gate()
     with pytest.raises(errors.UnsupportedParamsError):
@@ -247,6 +261,7 @@ def test_n_below_two_is_not_a_hint_drop(call: Caller) -> None:
 
 @pytest.mark.usefixtures("bare_adapters")
 @pytest.mark.parametrize("explicit", [False, []])
+@pytest.mark.fr("FR5")
 def test_per_call_off_beats_the_module_level_value(
     call: Caller, monkeypatch: pytest.MonkeyPatch, explicit: object
 ) -> None:

@@ -33,6 +33,7 @@ def _answer(provider: str, stream: bool) -> httpx2.Response:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR31")
 def test_the_second_identical_call_is_served_from_memory(call: Caller, provider: str) -> None:
     run = Run({PRIMARY[provider]: [_answer]})
     first = call(run.gate, model=MODELS[provider], messages=MSGS)
@@ -57,6 +58,7 @@ def test_the_second_identical_call_is_served_from_memory(call: Caller, provider:
         {"drop_params": ["tools"]},
     ],
 )
+@pytest.mark.fr("FR31")
 def test_changing_any_key_field_is_a_miss(call: Caller, change: dict[str, Any]) -> None:
     run = Run({OPENAI: [_answer]})
     base: dict[str, Any] = {"model": GPT, "messages": MSGS}
@@ -66,6 +68,7 @@ def test_changing_any_key_field_is_a_miss(call: Caller, change: dict[str, Any]) 
     assert result.metadata is not None and result.metadata.cache_hit is False
 
 
+@pytest.mark.fr("FR31")
 def test_calls_that_differ_only_in_drop_params_are_separate_entries(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=MSGS, drop_params=True)
@@ -75,6 +78,7 @@ def test_calls_that_differ_only_in_drop_params_are_separate_entries(call: Caller
     assert len(run.sent) == 2
 
 
+@pytest.mark.fr("FR31")
 def test_callers_never_share_a_mutable_object_with_the_cache(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     first = call(run.gate, model=GPT, messages=MSGS)
@@ -90,6 +94,7 @@ def test_callers_never_share_a_mutable_object_with_the_cache(call: Caller) -> No
     assert len(run.sent) == 1
 
 
+@pytest.mark.fr("FR31")
 def test_a_hit_says_nothing_was_dispatched_and_emits_only_a_cache_event(call: Caller) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler)
@@ -107,6 +112,7 @@ def test_a_hit_says_nothing_was_dispatched_and_emits_only_a_cache_event(call: Ca
 
 
 @pytest.mark.parametrize("retention", [False, True])
+@pytest.mark.fr("FR31", "FR38")
 def test_cached_content_never_reaches_events_or_logs(
     call: Caller, caplog: pytest.LogCaptureFixture, retention: bool
 ) -> None:
@@ -122,6 +128,7 @@ def test_cached_content_never_reaches_events_or_logs(
     assert ASKED not in text and ANSWERED not in text
 
 
+@pytest.mark.fr("FR31")
 def test_a_failed_call_is_not_cached(call: Caller) -> None:
     run = Run({OPENAI: [_status(400), _answer]})
     with pytest.raises(errors.BadRequestError):
@@ -131,6 +138,7 @@ def test_a_failed_call_is_not_cached(call: Caller) -> None:
     assert result.metadata is not None and result.metadata.cache_hit is False
 
 
+@pytest.mark.fr("FR31")
 def test_an_invalid_request_raises_every_time_and_never_touches_the_cache(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     for _ in range(2):
@@ -139,6 +147,7 @@ def test_an_invalid_request_raises_every_time_and_never_touches_the_cache(call: 
     assert run.sent == []
 
 
+@pytest.mark.fr("FR32")
 def test_streams_neither_read_nor_write_the_cache(call: Caller, stream_call: StreamCaller) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=MSGS)
@@ -152,6 +161,7 @@ def test_streams_neither_read_nor_write_the_cache(call: Caller, stream_call: Str
     assert after.metadata is not None and after.metadata.cache_hit is True
 
 
+@pytest.mark.fr("FR32")
 def test_a_stream_alone_leaves_nothing_behind(call: Caller, stream_call: StreamCaller) -> None:
     run = Run({OPENAI: [_answer]})
     stream_call(run.gate, model=GPT, messages=MSGS)
@@ -159,6 +169,8 @@ def test_a_stream_alone_leaves_nothing_behind(call: Caller, stream_call: StreamC
     assert len(run.sent) == 2
 
 
+@pytest.mark.fr("FR31")
+@pytest.mark.mode_independent("drives the sync and the async driver in one body")
 def test_the_sync_and_async_drivers_share_one_cache() -> None:
     run = Run({OPENAI: [_answer]})
     run.gate.completion(model=GPT, messages=MSGS)
@@ -167,13 +179,15 @@ def test_the_sync_and_async_drivers_share_one_cache() -> None:
     assert result.metadata is not None and result.metadata.cache_hit is True
 
 
-def test_each_instance_has_its_own_cache() -> None:
+@pytest.mark.fr("FR31")
+def test_each_instance_has_its_own_cache(call: Caller) -> None:
     first, second = Run({OPENAI: [_answer]}), Run({OPENAI: [_answer]})
-    first.gate.completion(model=GPT, messages=MSGS)
-    second.gate.completion(model=GPT, messages=MSGS)
+    call(first.gate, model=GPT, messages=MSGS)
+    call(second.gate, model=GPT, messages=MSGS)
     assert len(first.sent) == 1 and len(second.sent) == 1
 
 
+@pytest.mark.fr("FR31")
 def test_a_fallback_answer_is_cached_under_the_original_request(call: Caller) -> None:
     run = Run({OPENAI: [_status(503)], ANTHROPIC: [_answer]}, **_fallbacks(CLAUDE))
     first = call(run.gate, model=GPT, messages=MSGS)
@@ -183,6 +197,7 @@ def test_a_fallback_answer_is_cached_under_the_original_request(call: Caller) ->
     assert second.metadata is not None and second.metadata.cache_hit is True
 
 
+@pytest.mark.fr("FR31")
 def test_a_counted_answer_is_cached_with_its_counts_left_out_of_the_hit(call: Caller) -> None:
     def no_usage(provider: str, stream: bool) -> httpx2.Response:
         body = _json_ok(provider)
@@ -197,6 +212,7 @@ def test_a_counted_answer_is_cached_with_its_counts_left_out_of_the_hit(call: Ca
     assert len(run.sent) == 1
 
 
+@pytest.mark.fr("FR31", "FR37")
 def test_a_hit_reaches_the_handler_exactly_once(call: Caller) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler)
@@ -205,6 +221,7 @@ def test_a_hit_reaches_the_handler_exactly_once(call: Caller) -> None:
     assert handler.types == ["dispatch_started", "call_succeeded", "cache_hit"]
 
 
+@pytest.mark.fr("FR31")
 def test_a_call_that_needed_a_retry_is_cached_once_it_succeeds(
     call: Caller, delays: list[float]
 ) -> None:
@@ -219,6 +236,7 @@ def test_a_call_that_needed_a_retry_is_cached_once_it_succeeds(
     assert second.metadata is not None and second.metadata.cache_hit is True
 
 
+@pytest.mark.fr("FR32")
 def test_a_call_that_opts_out_neither_reads_nor_writes(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=MSGS)
@@ -229,6 +247,7 @@ def test_a_call_that_opts_out_neither_reads_nor_writes(call: Caller) -> None:
     assert len(run.sent) == 2 and after.metadata is not None and after.metadata.cache_hit is True
 
 
+@pytest.mark.fr("FR32")
 def test_a_call_that_opts_out_leaves_nothing_behind(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=MSGS, cache=False)
@@ -237,6 +256,7 @@ def test_a_call_that_opts_out_leaves_nothing_behind(call: Caller) -> None:
     assert again.metadata is not None and again.metadata.cache_hit is False
 
 
+@pytest.mark.fr("FR32")
 def test_an_opted_out_call_gives_the_full_event_story_and_no_cache_event(call: Caller) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler)
@@ -246,6 +266,7 @@ def test_an_opted_out_call_gives_the_full_event_story_and_no_cache_event(call: C
 
 
 @pytest.mark.parametrize("value", [None, True])
+@pytest.mark.fr("FR32")
 def test_cache_none_or_true_means_the_cache_is_used(call: Caller, value: bool | None) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=MSGS, cache=value)
@@ -254,6 +275,7 @@ def test_cache_none_or_true_means_the_cache_is_used(call: Caller, value: bool | 
 
 
 @pytest.mark.parametrize("bad", ["no", 0, 1, []])
+@pytest.mark.fr("FR32")
 def test_a_cache_flag_that_is_not_a_bool_is_refused_before_any_request(
     call: Caller, bad: Any
 ) -> None:
@@ -263,6 +285,7 @@ def test_a_cache_flag_that_is_not_a_bool_is_refused_before_any_request(
     assert run.sent == []
 
 
+@pytest.mark.fr("FR31")
 def test_the_cache_holds_at_most_its_maximum_and_evicts_the_least_recently_used(
     call: Caller,
 ) -> None:
@@ -280,6 +303,7 @@ def test_the_cache_holds_at_most_its_maximum_and_evicts_the_least_recently_used(
     assert ask("b") is False, "b was the least recently used, so it left"
 
 
+@pytest.mark.fr("FR31")
 def test_the_default_bound_is_256_answers(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     for number in range(257):
@@ -290,6 +314,7 @@ def test_the_default_bound_is_256_answers(call: Caller) -> None:
     assert len(run.sent) == 258
 
 
+@pytest.mark.fr("FR31")
 def test_a_maximum_of_zero_turns_the_cache_off(call: Caller) -> None:
     run = Run({OPENAI: [_answer]}, cache_max_entries=0)
     first = call(run.gate, model=GPT, messages=MSGS)
@@ -300,11 +325,14 @@ def test_a_maximum_of_zero_turns_the_cache_off(call: Caller) -> None:
 
 
 @pytest.mark.parametrize("bad", [-1, 1.5, True, "3", [], float("nan")])
+@pytest.mark.fr("FR31")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_a_bad_maximum_is_refused_at_setup(bad: Any) -> None:
     with pytest.raises(errors.BadRequestError):
         Run({OPENAI: [_answer]}, cache_max_entries=bad)
 
 
+@pytest.mark.fr("FR32")
 def test_streams_ignore_the_flag_and_the_bound(call: Caller, stream_call: StreamCaller) -> None:
     run = Run({OPENAI: [_answer]}, cache_max_entries=0)
     streamed = stream_call(run.gate, model=GPT, messages=MSGS, cache=False)
@@ -312,6 +340,7 @@ def test_streams_ignore_the_flag_and_the_bound(call: Caller, stream_call: Stream
     assert len(run.sent) == 1
 
 
+@pytest.mark.fr("FR31")
 def test_a_near_repeat_request_is_a_miss(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=[{"role": "user", "content": "What is 2+2?"}])
@@ -320,6 +349,7 @@ def test_a_near_repeat_request_is_a_miss(call: Caller) -> None:
     assert near.metadata is not None and near.metadata.cache_hit is False
 
 
+@pytest.mark.fr("FR32")
 def test_an_opted_out_call_that_needed_a_retry_or_a_fallback_still_writes_nothing(
     call: Caller, delays: list[float]
 ) -> None:
@@ -339,12 +369,14 @@ def test_an_opted_out_call_that_needed_a_retry_or_a_fallback_still_writes_nothin
     assert len(fallen.sent) > sent
 
 
+@pytest.mark.fr("FR32")
 def test_the_opt_out_is_not_sent_to_the_provider(call: Caller) -> None:
     run = Run({OPENAI: [_answer]})
     call(run.gate, model=GPT, messages=MSGS, cache=False)
     assert b"cache" not in run.sent[0].content
 
 
+@pytest.mark.fr("FR32")
 def test_a_stream_that_opts_out_leaves_an_existing_entry_alone(
     call: Caller, stream_call: StreamCaller
 ) -> None:
@@ -356,6 +388,7 @@ def test_a_stream_that_opts_out_leaves_an_existing_entry_alone(
     assert len(run.sent) == 2 and after.metadata is not None and after.metadata.cache_hit is True
 
 
+@pytest.mark.fr("FR32")
 def test_a_bad_cache_flag_is_refused_on_a_stream_too(stream_call: StreamCaller) -> None:
     run = Run({OPENAI: [_answer]})
     refused = stream_call(run.gate, model=GPT, messages=MSGS, cache="no")

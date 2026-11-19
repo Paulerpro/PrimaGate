@@ -71,6 +71,29 @@ the code.
 PrimaGate has a sync API (`completion`) and an async one (`acompletion`). Where a change applies to
 both, test it in both sync and async mode, so the two never drift apart.
 
+### Conformance tests
+
+The tests in `tests/conformance/` prove the product's functional requirements (FRs). Each one is
+tagged with the FRs it proves, for example `@pytest.mark.fr("FR7")`. Tag a test only with an FR
+whose behaviour it asserts.
+
+A conformance test is parametrized over sync and async mode, usually through the `call` or
+`stream_call` fixture. A test that is not, such as a check made at setup or one that drives both
+modes in a single body, carries `@pytest.mark.mode_independent("<why>")`, where the reason says why.
+
+The [conformance matrix](docs/conformance-matrix.md) maps each FR to its tests. It is generated, so
+after you add, move or retag a conformance test, regenerate it and commit the result:
+
+```bash
+uv run python scripts/conformance_matrix.py
+```
+
+`uv run pytest` fails if the matrix is out of date, if a required FR has no test, if a tag names an
+unknown FR, or if a test breaks the sync and async rule.
+
+`FR_TITLES` and `REQUIRED` in `scripts/conformance_matrix.py` mirror the FR headings in the PRD and
+the FRs that FR-41 requires. When the PRD changes, change them with it.
+
 ## Versioning
 
 Read [docs/versioning.md](docs/versioning.md) before you change anything a user can import from

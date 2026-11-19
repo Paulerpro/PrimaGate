@@ -67,6 +67,7 @@ def _routed(provider: str) -> dict[str, Any]:
 
 @pytest.mark.usefixtures("delays")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_a_retry_that_succeeds_stays_on_the_endpoint(
     call: Caller, provider: str, delays: list[float]
 ) -> None:
@@ -80,6 +81,7 @@ def test_a_retry_that_succeeds_stays_on_the_endpoint(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12", "FR14")
 def test_spent_retries_move_on_to_the_redundant_endpoint(
     call: Caller, provider: str, delays: list[float]
 ) -> None:
@@ -96,6 +98,7 @@ def test_spent_retries_move_on_to_the_redundant_endpoint(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_when_everything_fails_the_last_error_is_raised_with_both_rows(
     call: Caller, provider: str, delays: list[float]
 ) -> None:
@@ -110,6 +113,7 @@ def test_when_everything_fails_the_last_error_is_raised_with_both_rows(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_an_advance_error_skips_the_retries(
     call: Caller, provider: str, delays: list[float]
 ) -> None:
@@ -120,6 +124,7 @@ def test_an_advance_error_skips_the_retries(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_a_raise_error_never_reaches_the_redundant_endpoint(
     call: Caller, provider: str, delays: list[float]
 ) -> None:
@@ -131,6 +136,7 @@ def test_a_raise_error_never_reaches_the_redundant_endpoint(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR13")
 def test_routing_off_makes_one_request_without_sleep_or_randomness(
     call: Caller, provider: str, delays: list[float], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -144,6 +150,7 @@ def test_routing_off_makes_one_request_without_sleep_or_randomness(
     assert len(run.sent) == 1 and delays == []
 
 
+@pytest.mark.fr("FR12")
 def test_delays_follow_the_configured_settings(call: Caller, delays: list[float]) -> None:
     run = Run(
         {PRIMARY["openai"]: [_status(503)], "b.test": [_answer]},
@@ -156,6 +163,7 @@ def test_delays_follow_the_configured_settings(call: Caller, delays: list[float]
     assert delays == [0.5, 1.0, 1.5, 1.5]
 
 
+@pytest.mark.fr("FR12")
 def test_jitter_scales_each_delay(
     call: Caller, delays: list[float], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -165,6 +173,7 @@ def test_jitter_scales_each_delay(
     assert delays == [0.25, 0.5]
 
 
+@pytest.mark.fr("FR12")
 def test_zero_retries_goes_straight_to_the_redundant_endpoint(
     call: Caller, delays: list[float]
 ) -> None:
@@ -179,6 +188,7 @@ def test_zero_retries_goes_straight_to_the_redundant_endpoint(
 
 @pytest.mark.usefixtures("delays")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR14")
 def test_the_redundant_endpoint_uses_its_own_key_and_never_leaks_it(
     call: Caller, provider: str
 ) -> None:
@@ -193,6 +203,7 @@ def test_the_redundant_endpoint_uses_its_own_key_and_never_leaks_it(
 
 
 @pytest.mark.usefixtures("delays")
+@pytest.mark.fr("FR14")
 def test_an_endpoint_without_a_key_uses_the_providers_key(call: Caller) -> None:
     routing = {"provider_routing": {"gpt-4o": [{"base_url": B_URL, "api_key": ""}]}}
     run = Run({PRIMARY["openai"]: [_status(401)], "b.test": [_answer]}, **routing)
@@ -201,6 +212,7 @@ def test_an_endpoint_without_a_key_uses_the_providers_key(call: Caller) -> None:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_a_stream_that_fails_to_open_is_retried_then_failed_over(
     stream_call: StreamCaller, provider: str, delays: list[float]
 ) -> None:
@@ -216,6 +228,7 @@ def test_a_stream_that_fails_to_open_is_retried_then_failed_over(
 
 
 @pytest.mark.usefixtures("delays")
+@pytest.mark.fr("FR12")
 def test_an_error_event_before_the_first_chunk_is_retried(stream_call: StreamCaller) -> None:
     def broken(provider: str, stream: bool) -> httpx2.Response:
         body = _event(None, {"error": {"message": "boom", "type": "server_error"}})
@@ -228,6 +241,7 @@ def test_an_error_event_before_the_first_chunk_is_retried(stream_call: StreamCal
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_a_stream_is_never_retried_after_its_first_chunk(
     stream_call: StreamCaller, provider: str, delays: list[float]
 ) -> None:
@@ -256,6 +270,8 @@ def test_a_stream_is_never_retried_after_its_first_chunk(
         {"backoff_max": float("inf")},
     ],
 )
+@pytest.mark.fr("FR12")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_bad_retry_settings_are_rejected_at_setup(settings: dict[str, Any]) -> None:
     with pytest.raises(errors.BadRequestError, match=next(iter(settings))):
         PrimaGate(api_keys=KEYS, **settings)
@@ -293,6 +309,7 @@ def test_the_redundant_key_never_leaks_from_a_stream(
 
 @pytest.mark.usefixtures("delays")
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12")
 def test_a_drop_after_failover_reports_every_endpoint_tried(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -308,6 +325,7 @@ def test_a_drop_after_failover_reports_every_endpoint_tried(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR12", "FR14")
 def test_several_redundant_endpoints_are_tried_in_order(
     call: Caller, provider: str, delays: list[float]
 ) -> None:

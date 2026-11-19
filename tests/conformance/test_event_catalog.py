@@ -72,12 +72,16 @@ def _check_shape(event: events.Event) -> None:
             assert as_dict[field.name] is not None
 
 
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
+@pytest.mark.fr("FR37")
 def test_every_catalog_class_has_an_example_and_a_unique_snake_case_type() -> None:
     assert {cls.__name__ for cls in events.EVENT_CLASSES} == set(EXAMPLES)
     assert len(set(events.EVENT_TYPES)) == len(events.EVENT_TYPES)
 
 
 @pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
+@pytest.mark.fr("FR37")
 def test_each_catalog_event_has_the_expected_shape(name: str) -> None:
     event = EXAMPLES[name]
     assert type(event).__name__ == name
@@ -85,11 +89,15 @@ def test_each_catalog_event_has_the_expected_shape(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.mode_independent("checks the package exports; makes no call")
+@pytest.mark.fr("FR37")
 def test_every_catalog_event_is_exported_from_the_package_root(name: str) -> None:
     assert name in events.EXPORTED
     assert getattr(primagate, name) is type(EXAMPLES[name])
 
 
+@pytest.mark.fr("FR36")
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
 def test_the_decision_types_are_distinct_catalog_entries() -> None:
     types = [cls.event_type for cls in DECISION_CLASSES]
     assert types == [
@@ -102,6 +110,8 @@ def test_the_decision_types_are_distinct_catalog_entries() -> None:
 
 
 @pytest.mark.parametrize("cls", DECISION_CLASSES)
+@pytest.mark.fr("FR36")
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
 def test_a_decision_event_carries_the_traceability_fields(cls: type[events.DecisionEvent]) -> None:
     assert issubclass(cls, events.DecisionEvent)
     names = [f.name for f in dataclasses.fields(cls)]
@@ -112,12 +122,16 @@ def test_a_decision_event_carries_the_traceability_fields(cls: type[events.Decis
 
 
 @pytest.mark.parametrize("missing", DECISION_FIELDS)
+@pytest.mark.fr("FR36")
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
 def test_a_decision_event_without_one_of_the_fields_cannot_be_built(missing: str) -> None:
     fields: dict[str, Any] = {k: v for k, v in DECISION.items() if k != missing}
     with pytest.raises(TypeError):
         events.RoutingDecision("req-1", **fields)
 
 
+@pytest.mark.fr("FR36")
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
 def test_the_decision_base_cannot_be_built_and_is_exported() -> None:
     with pytest.raises(TypeError):
         events.DecisionEvent("req-1", **DECISION)
@@ -125,11 +139,14 @@ def test_the_decision_base_cannot_be_built_and_is_exported() -> None:
     assert primagate.DecisionEvent is events.DecisionEvent
 
 
+@pytest.mark.fr("FR36")
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
 def test_only_the_decision_types_are_decision_events() -> None:
     others = [cls for cls in events.EVENT_CLASSES if cls not in DECISION_CLASSES]
     assert not any(issubclass(cls, events.DecisionEvent) for cls in others)
 
 
+@pytest.mark.fr("FR37")
 def test_every_event_a_real_call_delivers_has_the_catalog_shape(
     call: Caller, delays: list[float]
 ) -> None:
@@ -153,6 +170,7 @@ def test_every_event_a_real_call_delivers_has_the_catalog_shape(
         _check_shape(event)
 
 
+@pytest.mark.fr("FR31", "FR36")
 def test_a_cache_hit_emits_the_cache_event_and_no_decision_event(call: Caller) -> None:
     handler = Recorder()
     run = Run({OPENAI: [_answer]}, event_handler=handler)

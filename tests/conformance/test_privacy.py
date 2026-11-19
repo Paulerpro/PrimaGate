@@ -40,6 +40,7 @@ def _seen(handler: Recorder, caplog: pytest.LogCaptureFixture) -> str:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR38")
 def test_by_default_no_event_or_log_line_holds_the_conversation(
     call: Caller, provider: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -56,6 +57,7 @@ def test_by_default_no_event_or_log_line_holds_the_conversation(
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR38")
 def test_opting_in_puts_both_sides_of_the_conversation_in_events_and_logs(
     call: Caller, provider: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -73,6 +75,7 @@ def test_opting_in_puts_both_sides_of_the_conversation_in_events_and_logs(
     assert any(line.startswith("call_succeeded") and ANSWERED in line for line in lines)
 
 
+@pytest.mark.fr("FR38")
 def test_every_dispatch_carries_the_request_when_retried(
     call: Caller, delays: list[float], caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -85,6 +88,7 @@ def test_every_dispatch_carries_the_request_when_retried(
     assert len(started) > 1 and all(s.messages is not None for s in started)
 
 
+@pytest.mark.fr("FR38")
 def test_error_text_is_never_retained_even_when_opted_in(call: Caller) -> None:
     handler = Recorder()
     run = Run(
@@ -99,11 +103,14 @@ def test_error_text_is_never_retained_even_when_opted_in(call: Caller) -> None:
 
 
 @pytest.mark.parametrize("value", ["yes", 1, 0, None, []])
+@pytest.mark.fr("FR38")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_payload_retention_must_be_a_bool(value: Any) -> None:
     with pytest.raises(errors.BadRequestError, match="payload_retention"):
         PrimaGate(payload_retention=value)
 
 
+@pytest.mark.fr("FR38")
 def test_a_stream_follows_the_same_rules(
     stream_call: StreamCaller, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -145,6 +152,7 @@ def _leaks(secret: str, *places: object) -> list[str]:
 
 @pytest.mark.parametrize("retention", [False, True])
 @pytest.mark.parametrize("via", ["argument", "environment"])
+@pytest.mark.fr("FR38")
 def test_a_key_echoed_by_the_provider_appears_nowhere(
     call: Caller,
     monkeypatch: pytest.MonkeyPatch,
@@ -200,6 +208,7 @@ def test_a_key_echoed_by_the_provider_appears_nowhere(
     assert seen, "the scenario must have reached the provider"
 
 
+@pytest.mark.mode_independent("inspects the instance; makes no call")
 def test_a_key_never_shows_in_the_instance_repr() -> None:
     gate = PrimaGate(api_keys={"openai": "sk-repr-canary"}, payload_retention=True)
     assert "sk-repr-canary" not in repr(gate) and "sk-repr-canary" not in str(gate)

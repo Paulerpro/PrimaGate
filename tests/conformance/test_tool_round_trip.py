@@ -114,6 +114,7 @@ def _shape(value: Any) -> Any:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR2")
 def test_tool_round_trip_completes(call: Caller, provider: str) -> None:
     sent: list[dict[str, Any]] = []
     gate = _gate(sent)
@@ -137,6 +138,7 @@ def test_tool_round_trip_completes(call: Caller, provider: str) -> None:
     assert len(sent) == 2
 
 
+@pytest.mark.fr("FR1", "FR2")
 def test_tool_call_response_shape_is_identical_across_providers(call: Caller) -> None:
     gate = _gate([])
     shapes = {
@@ -150,6 +152,7 @@ def test_tool_call_response_shape_is_identical_across_providers(call: Caller) ->
     assert shapes["openai"] == shapes["anthropic"]
 
 
+@pytest.mark.fr("FR2")
 def test_anthropic_receives_one_merged_result_turn(call: Caller) -> None:
     sent: list[dict[str, Any]] = []
     gate = _gate(sent)

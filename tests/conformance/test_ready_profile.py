@@ -248,6 +248,7 @@ def make(mode: str) -> Iterator[Callable[..., Served]]:
 # --- PREPARING ---
 
 
+@pytest.mark.fr("FR22", "FR23")
 def test_the_first_call_starts_preparation_and_is_served_by_the_interim_binding(
     make: Callable[..., Served],
 ) -> None:
@@ -261,6 +262,7 @@ def test_the_first_call_starts_preparation_and_is_served_by_the_interim_binding(
     assert run.state is PrepState.READY and len(run.prepared) == 1
 
 
+@pytest.mark.fr("FR22", "FR23")
 def test_every_call_while_preparing_goes_to_the_interim_binding_and_starts_nothing(
     make: Callable[..., Served],
 ) -> None:
@@ -273,6 +275,7 @@ def test_every_call_while_preparing_goes_to_the_interim_binding_and_starts_nothi
     assert len(run.prepared) == 1 and run.types.count("preparation_started") == 1
 
 
+@pytest.mark.fr("FR22")
 def test_a_stream_while_preparing_opens_on_the_interim_tier(make: Callable[..., Served]) -> None:
     run = make([GOOD], hold=True)
     chunks = run.stream()
@@ -284,6 +287,7 @@ def test_a_stream_while_preparing_opens_on_the_interim_tier(make: Callable[..., 
 # --- READY ---
 
 
+@pytest.mark.fr("FR23")
 def test_a_stream_once_ready_asks_the_analyzer_with_the_profile_and_opens_on_its_choice(
     make: Callable[..., Served],
 ) -> None:
@@ -300,6 +304,7 @@ def test_a_stream_once_ready_asks_the_analyzer_with_the_profile_and_opens_on_its
     assert run.decisions[-1].input_fingerprint == run.fingerprint
 
 
+@pytest.mark.fr("FR23")
 def test_a_ready_profile_is_what_the_analyzer_reads(make: Callable[..., Served]) -> None:
     run = make([GOOD])
     run.run(**_asking(0))
@@ -315,6 +320,7 @@ def test_a_ready_profile_is_what_the_analyzer_reads(make: Callable[..., Served])
     assert "- purpose" not in prompt
 
 
+@pytest.mark.fr("FR36")
 def test_a_ready_decision_names_its_profile(make: Callable[..., Served]) -> None:
     run = make([GOOD])
     run.run(**_asking(0))
@@ -333,6 +339,7 @@ def test_a_ready_decision_names_its_profile(make: Callable[..., Served]) -> None
     assert run.reasons == ["preparing"]
 
 
+@pytest.mark.fr("FR23")
 def test_a_call_in_flight_keeps_preparing_and_the_next_uses_ready(
     make: Callable[..., Served],
 ) -> None:
@@ -351,6 +358,7 @@ def test_a_call_in_flight_keeps_preparing_and_the_next_uses_ready(
 # --- the Cache ---
 
 
+@pytest.mark.fr("FR31")
 def test_an_interim_answer_is_not_replayed_once_ready(make: Callable[..., Served]) -> None:
     run = make([GOOD], hold=True)
     assert _tier(run.call(**_asking(0))) == INTERIM
@@ -361,6 +369,7 @@ def test_an_interim_answer_is_not_replayed_once_ready(make: Callable[..., Served
     assert "cache_hit" not in run.types
 
 
+@pytest.mark.fr("FR31")
 def test_a_ready_answer_is_cached_as_before(make: Callable[..., Served]) -> None:
     run = make([GOOD])
     run.run(**_asking(0))
@@ -373,6 +382,7 @@ def test_a_ready_answer_is_cached_as_before(make: Callable[..., Served]) -> None
 # --- FAILED ---
 
 
+@pytest.mark.fr("FR22", "FR23")
 def test_after_a_final_failure_calls_stay_on_the_interim_binding(
     make: Callable[..., Served],
 ) -> None:
@@ -387,6 +397,7 @@ def test_after_a_final_failure_calls_stay_on_the_interim_binding(
     assert run.reasons == ["preparing", "preparation_failed", "preparation_failed"]
 
 
+@pytest.mark.fr("FR23")
 def test_a_restart_after_the_cooldown_switches_calls_to_the_analyzer(
     make: Callable[..., Served],
 ) -> None:
@@ -408,6 +419,7 @@ def test_a_restart_after_the_cooldown_switches_calls_to_the_analyzer(
 # --- restart with a stored Profile ---
 
 
+@pytest.mark.fr("FR29")
 def test_a_stored_profile_is_served_from_the_second_call_after_a_restart(
     make: Callable[..., Served], tmp_path: Path
 ) -> None:
@@ -430,6 +442,7 @@ def test_a_stored_profile_is_served_from_the_second_call_after_a_restart(
 # --- unchanged routing ---
 
 
+@pytest.mark.fr("FR23")
 def test_without_sources_the_analyzer_reads_the_empty_profile(
     make: Callable[..., Served],
 ) -> None:
@@ -446,6 +459,7 @@ def test_without_sources_the_analyzer_reads_the_empty_profile(
     )
 
 
+@pytest.mark.fr("FR25")
 def test_a_call_only_one_tier_can_take_is_routed_to_it_whatever_the_state(
     make: Callable[..., Served],
 ) -> None:

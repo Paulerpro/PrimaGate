@@ -37,6 +37,7 @@ def _no_usage(provider: str, stream: bool) -> httpx2.Response:
 
 
 @pytest.mark.parametrize(("provider", "total"), [("openai", 0.0075), ("anthropic", 0.007)])
+@pytest.mark.fr("FR33")
 def test_a_known_model_reports_counts_and_cost(call: Caller, provider: str, total: float) -> None:
     run = Run({PRIMARY[provider]: [_answer_with()]})
     result = call(run.gate, model=MODELS[provider], messages=MSGS)
@@ -48,6 +49,7 @@ def test_a_known_model_reports_counts_and_cost(call: Caller, provider: str, tota
     assert wire["token_counts"]["prompt_tokens"] == 1000 and wire["cost"]["currency"] == "USD"
 
 
+@pytest.mark.fr("FR33")
 def test_a_caller_override_replaces_the_bundled_price(call: Caller) -> None:
     run = Run(
         {OPENAI: [_answer_with()]},
@@ -58,6 +60,7 @@ def test_a_caller_override_replaces_the_bundled_price(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.1 + 0.1)
 
 
+@pytest.mark.fr("FR33")
 def test_an_override_prices_a_model_the_bundle_does_not_know(call: Caller) -> None:
     run = Run(
         {OPENAI: [_answer_with()]}, price_overrides={"openai/mystery-1": {"input": 1, "output": 1}}
@@ -67,6 +70,7 @@ def test_an_override_prices_a_model_the_bundle_does_not_know(call: Caller) -> No
     assert result.metadata.unknown_model is False and result.metadata.cost is not None
 
 
+@pytest.mark.fr("FR33")
 def test_an_unknown_model_still_answers_and_warns(
     call: Caller, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -85,6 +89,7 @@ def test_an_unknown_model_still_answers_and_warns(
     assert len(warned) == 1 and warned[0].getMessage().startswith("cost_unknown")
 
 
+@pytest.mark.fr("FR33")
 def test_a_dated_snapshot_is_priced_as_its_base(call: Caller) -> None:
     run = Run({OPENAI: [_answer_with("gpt-4o-2024-08-06")]})
     result = call(run.gate, model="gpt-4o-2024-08-06", messages=MSGS)
@@ -92,6 +97,7 @@ def test_a_dated_snapshot_is_priced_as_its_base(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.0075)
 
 
+@pytest.mark.fr("FR33")
 def test_a_near_name_gets_its_own_price(call: Caller) -> None:
     run = Run({OPENAI: [_answer_with()]})
     result = call(run.gate, model=MINI, messages=MSGS)
@@ -99,6 +105,7 @@ def test_a_near_name_gets_its_own_price(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.00045)
 
 
+@pytest.mark.fr("FR33")
 def test_a_fallback_answer_is_priced_as_the_fallback(call: Caller) -> None:
     run = Run({OPENAI: [_status(503)], ANTHROPIC: [_answer_with()]}, **_fallbacks(CLAUDE))
     result = call(run.gate, model=GPT, messages=MSGS)
@@ -106,6 +113,7 @@ def test_a_fallback_answer_is_priced_as_the_fallback(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.007)
 
 
+@pytest.mark.fr("FR33", "FR34")
 def test_a_response_without_usage_is_counted_by_the_heuristic_and_priced(
     call: Caller, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -117,6 +125,7 @@ def test_a_response_without_usage_is_counted_by_the_heuristic_and_priced(
     assert meta.token_counts.heuristic is True and meta.unknown_model is False
 
 
+@pytest.mark.fr("FR33")
 def test_an_estimate_never_changes_what_happens(call: Caller) -> None:
     run = Run({OPENAI: [_answer_with()]}, price_overrides={"gpt-4o": {"input": 1e9, "output": 1e9}})
     result = call(run.gate, model=GPT, messages=MSGS)
@@ -128,6 +137,7 @@ def _streamed(provider: str, stream: bool) -> httpx2.Response:
 
 
 @pytest.mark.parametrize("provider", MODELS)
+@pytest.mark.fr("FR33")
 def test_a_stream_carries_the_estimate_on_its_final_chunk(
     stream_call: StreamCaller, provider: str
 ) -> None:
@@ -143,6 +153,7 @@ def test_a_stream_carries_the_estimate_on_its_final_chunk(
     assert cost.total == pytest.approx({"openai": 22.5e-6, "anthropic": 22e-6}[provider])
 
 
+@pytest.mark.fr("FR33")
 def test_a_stream_of_an_unpriced_model_is_flagged_but_raises_no_event(
     stream_call: StreamCaller,
 ) -> None:
@@ -156,12 +167,14 @@ def test_a_stream_of_an_unpriced_model_is_flagged_but_raises_no_event(
     assert "cost_unknown" not in handler.types
 
 
+@pytest.mark.fr("FR33")
 def test_a_priced_model_raises_no_cost_unknown(call: Caller) -> None:
     handler = Recorder()
     call(Run({OPENAI: [_answer_with()]}, event_handler=handler).gate, model=GPT, messages=MSGS)
     assert "cost_unknown" not in handler.types
 
 
+@pytest.mark.fr("FR33")
 def test_an_override_survives_a_fallback(call: Caller) -> None:
     run = Run(
         {OPENAI: [_status(503)], ANTHROPIC: [_answer_with()]},
@@ -173,6 +186,7 @@ def test_an_override_survives_a_fallback(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.2)
 
 
+@pytest.mark.fr("FR33")
 def test_an_override_survives_a_retry(call: Caller, delays: list[float]) -> None:
     run = Run(
         {OPENAI: [_status(503), _answer_with()]},
@@ -185,6 +199,8 @@ def test_an_override_survives_a_retry(call: Caller, delays: list[float]) -> None
     assert result.metadata.cost.total == pytest.approx(0.2)
 
 
+@pytest.mark.fr("FR33")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
 def test_overrides_are_checked_when_the_instance_is_made() -> None:
     with pytest.raises(errors.BadRequestError, match="price_overrides"):
         PrimaGate(price_overrides={"gpt-4o": {"input": -1, "output": 1}})
@@ -194,6 +210,7 @@ def _bound_price(model: str, **price: float) -> dict[str, Any]:
     return {"tier_bindings": {"SMALL": {"model": model, "pricing": price}}}
 
 
+@pytest.mark.fr("FR33")
 def test_a_binding_price_replaces_the_bundled_price(call: Caller) -> None:
     run = Run({OPENAI: [_answer_with()]}, **_bound_price(GPT, input=10.0, output=20.0))
     result = call(run.gate, model=GPT, messages=MSGS)
@@ -201,6 +218,7 @@ def test_a_binding_price_replaces_the_bundled_price(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.01 + 0.01)
 
 
+@pytest.mark.fr("FR33")
 def test_a_caller_override_beats_a_binding_price(call: Caller) -> None:
     run = Run(
         {OPENAI: [_answer_with()]},
@@ -212,6 +230,7 @@ def test_a_caller_override_beats_a_binding_price(call: Caller) -> None:
     assert result.metadata.cost.total == pytest.approx(0.2)
 
 
+@pytest.mark.fr("FR33")
 def test_a_binding_prices_a_model_the_bundle_does_not_know(call: Caller) -> None:
     run = Run({OPENAI: [_answer_with()]}, **_bound_price("mystery-1", input=1.0, output=1.0))
     result = call(run.gate, model="mystery-1", messages=MSGS)
@@ -219,6 +238,7 @@ def test_a_binding_prices_a_model_the_bundle_does_not_know(call: Caller) -> None
     assert result.metadata.unknown_model is False and result.metadata.cost is not None
 
 
+@pytest.mark.fr("FR33")
 def test_a_binding_with_an_unknown_price_leaves_the_bundled_price(call: Caller) -> None:
     run = Run({OPENAI: [_answer_with()]}, **_bound_price(GPT, input=10.0))
     result = call(run.gate, model=GPT, messages=MSGS)
