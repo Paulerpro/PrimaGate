@@ -16,6 +16,12 @@ dependencies = [
     "typing-extensions>=4.16.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Paulerpro/PrimaGate"
+Repository = "https://github.com/Paulerpro/PrimaGate"
+Issues = "https://github.com/Paulerpro/PrimaGate/issues"
+Documentation = "https://github.com/Paulerpro/PrimaGate/blob/main/README.md"
+
 [project.optional-dependencies]
 tokens = ["tiktoken>=0.14,<1"]
 

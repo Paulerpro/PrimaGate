@@ -1054,6 +1054,14 @@ raises `BadRequestError` before the call starts.
 - **Background preparation is not a call.** Cancelling a call never stops a preparation it
   started; `close()` and `aclose()` do (step 18).
 
+## Contributing and versioning
+
+- [Contributing](https://github.com/Paulerpro/PrimaGate/blob/main/CONTRIBUTING.md): the issue
+  tracker, how changes are merged, and the checks to run.
+- [Code of conduct](https://github.com/Paulerpro/PrimaGate/blob/main/CODE_OF_CONDUCT.md).
+- [Versioning](https://github.com/Paulerpro/PrimaGate/blob/main/docs/versioning.md): what semantic
+  versioning covers.
+
 ## Notes
 
 - [Proxies and certificates](#install-notes)
