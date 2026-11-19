@@ -223,6 +223,14 @@ else:
 A stream that fails after its first chunk has already reached you ends with the plain error, not
 `AttemptsExhaustedError`, and carries `attempt_chain` too.
 
+In short, the layers always run in this order: Provider Routing and retries (a model's own
+endpoints), then Tier Failover (MEDIUM once, only for a Tier Routing call whose chosen Tier is
+SMALL or POWERFUL), then the Fallback List. To watch each layer fail and the request survive, run
+the forced-failure demo in the repository. It needs no key in its default, recorded mode, and can
+also run against OpenAI. See
+[examples/README.md](https://github.com/Paulerpro/PrimaGate/blob/main/examples/README.md) for how
+to run both modes.
+
 ### 8. Watch what PrimaGate does
 
 Every call reports what it does as events. Each event is delivered to the standard logger named
