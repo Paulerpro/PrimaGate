@@ -37,7 +37,7 @@ BOTH_BOUND = _setup(
     {
         "SMALL": {
             "model": "anthropic/claude-sonnet-5-5",
-            "settings": {"temperature": 0.2, "max_tokens": 512, "stop": ["END"]},
+            "settings": {"max_tokens": 512, "stop": ["END"]},
         },
         "MEDIUM": {
             "model": "openai/gpt-4o",
@@ -61,7 +61,7 @@ def _verdict(text: str) -> Any:
             "SMALL",
             "anthropic",
             "claude-sonnet-5-5",
-            {"temperature": 0.2, "max_tokens": 512, "stop_sequences": ["END"]},
+            {"max_tokens": 512, "stop_sequences": ["END"]},
         ),
         ("MEDIUM", "openai", "gpt-4o", {"temperature": 0.7, "max_tokens": 2048, "stop": ["DONE"]}),
     ],

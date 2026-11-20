@@ -7,7 +7,7 @@ from typing import Final
 from primagate.core import steps
 from primagate.core.context import RoutingContext
 from primagate.core.counting import messages_text
-from primagate.core.models import resolve_model
+from primagate.core.models import resolve_model, short_answer_settings
 from primagate.core.prices import PriceTable, estimate
 from primagate.core.profile import PREP_PROMPT_VERSION
 from primagate.schema import events
@@ -73,8 +73,8 @@ def begin_analysis(
             Message(role="system", content=_instructions(profile, policy)),
             Message(role="user", content=conversation),
         ],
-        temperature=0,
         max_tokens=_MAX_ANSWER_TOKENS,
+        **short_answer_settings(capabilities[provider], name),
     )
     return steps.Dispatch(provider, request, prices=prices)
 

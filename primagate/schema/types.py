@@ -74,6 +74,9 @@ class ChatCompletionRequest(_Serializable):
     seed: int | None = None
     tools: list[dict[str, Any]] | None = None
     response_format: dict[str, Any] | None = None
+    # Set only by the Analyzer. A model that reasons by default would otherwise spend the
+    # Analyzer's few answer tokens on that reasoning and return no text.
+    disable_thinking: bool | None = None
 
 
 @dataclass

@@ -274,3 +274,28 @@ def test_per_call_off_beats_the_module_level_value(
     monkeypatch.setattr(primagate, "drop_params", None, raising=False)
     result = call.module(model="gpt-4o", messages=TEXT, tools=[TOOL], drop_params=["tools"])
     assert result.metadata is not None and result.metadata.dropped_params == ["tools"]
+
+
+@pytest.mark.fr("FR5", "FR6")
+def test_temperature_on_a_model_that_rejects_it_is_dropped_and_recorded(call: Caller) -> None:
+    gate, sent = _gate()
+    result = call(gate, model=MODELS["anthropic"], messages=TEXT, temperature=0, drop_params=True)
+    assert "temperature" not in sent[0]
+    assert result.metadata is not None and result.metadata.dropped_params == ["temperature"]
+
+
+@pytest.mark.fr("FR5")
+def test_temperature_on_a_model_that_rejects_it_raises_without_the_opt_in(call: Caller) -> None:
+    gate, sent = _gate()
+    with pytest.raises(errors.UnsupportedParamsError) as info:
+        call(gate, model=MODELS["anthropic"], messages=TEXT, temperature=0)
+    assert "temperature" in info.value.message
+    assert sent == []
+
+
+@pytest.mark.fr("FR5")
+def test_temperature_is_still_sent_to_openai(call: Caller) -> None:
+    gate, sent = _gate()
+    result = call(gate, model=MODELS["openai"], messages=TEXT, temperature=0, drop_params=True)
+    assert sent[0]["temperature"] == 0
+    assert result.metadata is not None and result.metadata.dropped_params == []

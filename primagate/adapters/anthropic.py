@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC
 from email.utils import parsedate_to_datetime
@@ -59,6 +60,22 @@ _ERROR_TYPE_STATUS = {
     "overloaded_error": 529,
 }
 _CONTEXT_PHRASES = ("prompt is too long", "context window")
+# `claude-<family>-<major>...`. Anthropic's version 5 models reason before answering and reject
+# `temperature`; the older `claude-<major>-...` names and version 4 and below do neither.
+_FAMILY_MAJOR = re.compile(r"^claude-[a-z]+-(\d{1,2})(?:-|$)")
+
+
+def _is_version_5_or_later(model: str) -> bool:
+    match = _FAMILY_MAJOR.match(model)
+    return match is not None and int(match.group(1)) >= 5
+
+
+def _model_hints(model: str) -> frozenset[str]:
+    return frozenset({"temperature"}) if _is_version_5_or_later(model) else frozenset()
+
+
+def _thinks_by_default(model: str) -> bool:
+    return _is_version_5_or_later(model)
 
 
 class AnthropicAdapter:
@@ -73,6 +90,11 @@ class AnthropicAdapter:
         if request.seed is not None:
             raise errors.UnsupportedParamsError(
                 "Anthropic does not support seed", llm_provider=PROVIDER
+            )
+        if request.temperature is not None and "temperature" in _model_hints(request.model):
+            raise errors.UnsupportedParamsError(
+                f"Anthropic model '{request.model}' does not support temperature",
+                llm_provider=PROVIDER,
             )
         system, messages = _split_messages(request.messages)
         body: dict[str, Any] = {
@@ -90,6 +112,8 @@ class AnthropicAdapter:
             body["output_config"] = {"format": _output_format(request.response_format)}
         if request.temperature is not None:
             body["temperature"] = request.temperature
+        if request.disable_thinking and _thinks_by_default(request.model):
+            body["thinking"] = {"type": "disabled"}
         if request.top_p is not None:
             body["top_p"] = request.top_p
         if request.stop is not None:
@@ -177,6 +201,8 @@ class AnthropicAdapter:
             structured_output=True,
             streaming=True,
             unsupported_hints=frozenset({"n", "seed"}),
+            model_hints=_model_hints,
+            thinks_by_default=_thinks_by_default,
         )
 
 

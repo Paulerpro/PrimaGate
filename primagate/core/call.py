@@ -99,6 +99,7 @@ DROPPABLE_FEATURES = frozenset({"tools", "response_format", "image"})
 _HINTS: dict[str, Callable[[ChatCompletionRequest], bool]] = {
     "n": lambda r: r.n is not None and r.n > 1,
     "seed": lambda r: r.seed is not None,
+    "temperature": lambda r: r.temperature is not None,
 }
 
 
@@ -148,7 +149,7 @@ def _without_images(message: Message) -> Message:
 
 
 def apply_drops(
-    request: ChatCompletionRequest, declared: Capabilities, policy: DropPolicy
+    request: ChatCompletionRequest, declared: Capabilities, policy: DropPolicy, model: str
 ) -> tuple[ChatCompletionRequest, list[str]]:
     """Remove what the policy allows and the adapter cannot honor; report what was removed."""
     dropped: list[str] = []
@@ -167,8 +168,9 @@ def apply_drops(
             ]
             dropped.append("image")
     if policy.hints:
+        unsupported = declared.hints_for(model)
         for name, is_set in _HINTS.items():
-            if name in declared.unsupported_hints and is_set(request):
+            if name in unsupported and is_set(request):
                 changes[name] = None
                 dropped.append(name)
     return dataclasses.replace(request, **changes), dropped
@@ -187,7 +189,7 @@ def _build(
     declared = capabilities.get(provider)
     if declared is None:
         raise PrimaGateError(f"No adapter is registered for provider '{provider}'")
-    request, dropped = apply_drops(request, declared, drops)
+    request, dropped = apply_drops(request, declared, drops, model)
     missing = [f for f in required_features(request) if not getattr(declared, f)]
     if missing:
         names = [_FEATURE_DROP_NAMES[f] for f in missing]

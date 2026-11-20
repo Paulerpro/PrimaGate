@@ -1,7 +1,7 @@
 import dataclasses
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 import pytest
@@ -109,11 +109,12 @@ def _drive(
     ceiling: float | None = None,
     random_value: float = 0.0,
     crossed_at: int | None = None,
+    caps: Mapping[str, Capabilities] = CAPS,
 ) -> Trace:
     """Run the pure core against scripted outcomes, as a driver would."""
     trace = Trace()
     outcomes: Iterator[steps.DispatchOutcome | steps.Declined] = iter(replies)
-    action = begin_preparation(sources, FP, analyzer, CAPS, BUNDLED, ceiling)
+    action = begin_preparation(sources, FP, analyzer, caps, BUNDLED, ceiling)
     total = 0.0
     while not isinstance(action, steps.PreparationDone):
         trace.order.append(type(action).__name__)
@@ -187,6 +188,7 @@ def test_the_one_dispatch_is_uncapped_unrouted_and_asks_for_json() -> None:
     assert (sent.provider, sent.request.model) == ("openai", ANALYZER)
     assert sent.route is None and sent.plan is None and sent.cache_key is None
     assert sent.request.temperature == 0 and sent.request.max_tokens == PREP_MAX_ANSWER_TOKENS
+    assert not sent.request.disable_thinking
     system, user = sent.request.messages
     assert system.role == "system" and f"Prompt version: {PREP_PROMPT_VERSION}" in system.content
     for key in ("purpose", "interactions", "constraints", "capabilities", "unknowns"):
@@ -435,3 +437,13 @@ def test_an_unpriced_analyzer_emits_cost_unknown_before_going_on() -> None:
     assert unknown.request_id == PREP_ID and unknown.model == "openai/unpriced-local-model"
     assert trace.types == ["preparation_started", "cost_unknown", "profile_ready"]
     assert trace.spends == []
+
+
+def test_a_version_5_anthropic_analyzer_gets_no_temperature_and_thinking_off() -> None:
+    from primagate.adapters.anthropic import AnthropicAdapter
+
+    caps = {"anthropic": AnthropicAdapter().capabilities()}
+    (asked,) = _drive([_answer(GOOD)], analyzer="claude-haiku-5-5", caps=caps).asked
+    sent = asked.dispatch.request
+    assert sent.temperature is None and sent.disable_thinking is True
+    assert sent.max_tokens == PREP_MAX_ANSWER_TOKENS

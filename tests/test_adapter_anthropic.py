@@ -41,13 +41,14 @@ OK = {
 
 
 def test_build_request_shape_and_headers() -> None:
-    out = _build(Message(role="user", content="hi"), temperature=0.2, top_p=0.9)
+    # A model that takes `temperature`; version 5 models reject it.
+    out = _for_model("claude-sonnet-4-5", temperature=0.2, top_p=0.9)
     assert out.method == "POST"
     assert out.url == f"{BASE}/messages"
     assert out.headers["x-api-key"] == "sk-ant-secret"
     assert out.headers["anthropic-version"] == "2023-06-01"
     assert out.json_body == {
-        "model": "claude-sonnet-5-5",
+        "model": "claude-sonnet-4-5",
         "max_tokens": 4096,
         "messages": [{"role": "user", "content": "hi"}],
         "temperature": 0.2,
@@ -476,3 +477,59 @@ def test_images_capability_is_off() -> None:
 def test_declares_the_hint_params_it_cannot_honor() -> None:
     assert AnthropicAdapter().capabilities().unsupported_hints == {"n", "seed"}
     assert OpenAIAdapter().capabilities().unsupported_hints == frozenset()
+
+
+def _for_model(model: str, **kwargs: object):  # type: ignore[no-untyped-def]
+    request = ChatCompletionRequest(
+        model=model,
+        messages=[Message(role="user", content="hi")],
+        **kwargs,  # type: ignore[arg-type]
+    )
+    return AnthropicAdapter().build_request(request, api_key="sk-ant-secret", base_url=BASE)
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"])
+def test_temperature_is_refused_for_models_that_reject_it(model: str) -> None:
+    with pytest.raises(errors.UnsupportedParamsError) as info:
+        _for_model(model, temperature=0)
+    assert "temperature" in info.value.message and model in info.value.message
+    assert info.value.llm_provider == "anthropic"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-5",
+        "claude-opus-4-1",
+        "claude-sonnet-4-20250514",
+        "claude-3-5-sonnet-20241022",
+    ],
+)
+def test_temperature_is_still_sent_to_models_that_take_it(model: str) -> None:
+    assert _for_model(model, temperature=0.5).json_body["temperature"] == 0.5
+
+
+def test_a_model_that_rejects_temperature_declares_it_as_a_hint() -> None:
+    caps = AnthropicAdapter().capabilities()
+    assert caps.hints_for("claude-sonnet-5-5") == {"n", "seed", "temperature"}
+    assert caps.hints_for("claude-sonnet-4-5") == {"n", "seed"}
+    assert OpenAIAdapter().capabilities().hints_for("gpt-4o") == frozenset()
+
+
+def test_thinking_is_turned_off_on_request_for_models_that_think_by_default() -> None:
+    body = _for_model("claude-haiku-5-5", disable_thinking=True).json_body
+    assert body["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-5-5", "claude-sonnet-4-5"])
+def test_thinking_is_left_alone_unless_asked(model: str) -> None:
+    assert "thinking" not in _for_model(model).json_body
+    assert "thinking" not in _for_model(model, disable_thinking=False).json_body
+
+
+def test_thinking_is_never_sent_to_a_model_that_does_not_think_by_default() -> None:
+    assert "thinking" not in _for_model("claude-sonnet-4-5", disable_thinking=True).json_body
+
+
+def test_a_date_after_the_family_is_not_read_as_a_version() -> None:
+    assert _for_model("claude-sonnet-20250101", temperature=0.5).json_body["temperature"] == 0.5

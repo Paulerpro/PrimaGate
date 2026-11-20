@@ -262,3 +262,15 @@ def test_structured_output_capability() -> None:
 
 def test_images_capability() -> None:
     assert OpenAIAdapter().capabilities().images is True
+
+
+def test_the_internal_thinking_flag_is_never_sent_to_openai() -> None:
+    request = ChatCompletionRequest(
+        model="gpt-4o-mini", messages=[Message(role="user", content="hi")], disable_thinking=True
+    )
+    body = (
+        OpenAIAdapter()
+        .build_request(request, api_key="sk-x", base_url="https://x.test/v1")
+        .json_body
+    )
+    assert "disable_thinking" not in body

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -47,6 +47,14 @@ class StreamFailure(Exception):
         self.kind = kind
 
 
+def _no_model_hints(model: str) -> frozenset[str]:
+    return frozenset()
+
+
+def _never(model: str) -> bool:
+    return False
+
+
 @dataclass(frozen=True)
 class Capabilities:
     """Features the adapter implements today, not what the provider could do."""
@@ -57,6 +65,15 @@ class Capabilities:
     streaming: bool = False
     # Hint-type parameters (not behavior features) the provider cannot honor.
     unsupported_hints: frozenset[str] = frozenset()
+    # Hints that only some of the provider's models reject, so the rule depends on the model name.
+    model_hints: Callable[[str], frozenset[str]] = _no_model_hints
+    # Whether a model reasons before answering unless told not to, which uses up a small
+    # `max_tokens` before any text appears.
+    thinks_by_default: Callable[[str], bool] = _never
+
+    def hints_for(self, model: str) -> frozenset[str]:
+        """Every hint-type parameter `model` cannot honor."""
+        return self.unsupported_hints | self.model_hints(model)
 
 
 @dataclass(frozen=True)

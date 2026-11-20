@@ -388,7 +388,7 @@ def _honourable(binding: TierBinding) -> TierBinding:
     """
     where = f"tier_bindings {binding.tier.name}"
     spec = BUILTIN_PROVIDERS.get(binding.provider)
-    hints = spec.adapter().capabilities().unsupported_hints if spec else frozenset()
+    hints = spec.adapter().capabilities().hints_for(binding.model_id) if spec else frozenset()
     for name in binding.settings:
         if name in hints:
             raise BadRequestError(

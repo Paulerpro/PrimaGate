@@ -48,6 +48,8 @@ class OpenAIAdapter:
                 "Streaming does not support n greater than 1", llm_provider=PROVIDER
             )
         body = request.to_dict()
+        # An internal flag for providers whose models reason by default; OpenAI has no such field.
+        body.pop("disable_thinking", None)
         if request.stream:
             # Without this OpenAI sends no usage on a stream.
             body["stream_options"] = {"include_usage": True}

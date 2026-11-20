@@ -275,3 +275,20 @@ def test_every_binding_setting_is_a_field_of_the_request_it_fills() -> None:
     # Routing fills a request field of the same name, so a setting with no field would break it.
     fields = {f.name for f in dataclasses.fields(ChatCompletionRequest)}
     assert providers._SETTING_FIELDS <= fields
+
+
+def test_temperature_is_refused_for_a_model_that_rejects_it() -> None:
+    with pytest.raises(primagate.BadRequestError) as info:
+        PrimaGate(
+            tier_bindings={
+                "MEDIUM": {"model": "claude-sonnet-5-5", "settings": {"temperature": 0.2}}
+            }
+        )
+    assert "MEDIUM" in str(info.value) and "temperature" in str(info.value)
+
+
+def test_temperature_is_accepted_for_a_model_that_takes_it() -> None:
+    PrimaGate(
+        tier_bindings={"MEDIUM": {"model": "claude-sonnet-4-5", "settings": {"temperature": 0.2}}}
+    )
+    PrimaGate(tier_bindings={"MEDIUM": {"model": "gpt-4o", "settings": {"temperature": 0.2}}})

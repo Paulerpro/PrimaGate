@@ -72,7 +72,8 @@ def test_the_order_of_dropped_features_and_of_dict_keys_does_not_matter() -> Non
 def test_every_request_field_is_in_the_key_or_deliberately_left_out() -> None:
     """A new request field that changes the answer must not be forgotten by the Cache."""
     request = _request()
-    left_out = {"stream"}
+    # `disable_thinking` is set only on Analyzer requests, which are never cached.
+    left_out = {"stream", "disable_thinking"}
     for field in dataclasses.fields(ChatCompletionRequest):
         if field.name in left_out:
             continue

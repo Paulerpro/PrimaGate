@@ -121,7 +121,7 @@ The model answers from the text alone, because the image was dropped.
 
 The names you can drop are `"tools"`, `"response_format"` and `"image"`. `drop_params=True` is
 different: it only drops small tuning options a provider ignores or rejects, such as `seed` on
-Anthropic, and never a feature. Set `drop_params` on `PrimaGate(...)` to apply it to every call
+Anthropic or `temperature` on Anthropic's version 5 models, and never a feature. Set `drop_params` on `PrimaGate(...)` to apply it to every call
 from that instance; a value passed to a single call wins. `primagate.drop_params = [...]` does the
 same for the shared default instance used by `completion` and `acompletion`.
 

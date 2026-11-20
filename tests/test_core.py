@@ -259,7 +259,7 @@ def test_parse_drop_params_rejects(value: object) -> None:
 def test_apply_drops_leaves_the_callers_request_alone() -> None:
     request = _with(tools=[TOOL], messages=[IMAGE_MESSAGE])
     policy = DropPolicy(features=frozenset({"tools", "image"}))
-    changed, dropped = apply_drops(request, BARE, policy)
+    changed, dropped = apply_drops(request, BARE, policy, "gpt-4o")
     assert dropped == ["tools", "image"]
     assert request.tools == [TOOL] and request.messages == [IMAGE_MESSAGE]
     assert changed.tools is None and changed.messages[0].content == [
@@ -270,9 +270,9 @@ def test_apply_drops_leaves_the_callers_request_alone() -> None:
 def test_apply_drops_only_hints_the_adapter_declares() -> None:
     request = _with(n=3, seed=7)
     only_seed = Capabilities(unsupported_hints=frozenset({"seed"}))
-    changed, dropped = apply_drops(request, only_seed, DropPolicy(hints=True))
+    changed, dropped = apply_drops(request, only_seed, DropPolicy(hints=True), "gpt-4o")
     assert dropped == ["seed"] and changed.n == 3 and changed.seed is None
-    assert apply_drops(request, only_seed, DropPolicy())[1] == []
+    assert apply_drops(request, only_seed, DropPolicy(), "gpt-4o")[1] == []
 
 
 def test_dispatch_records_what_was_dropped_and_the_response_names_it() -> None:

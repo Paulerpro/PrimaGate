@@ -92,6 +92,9 @@ compared:
   that rejects either setting, or spends the tokens on hidden reasoning (reasoning-style models
   may), gives `provider_error` or `malformed_output` on every call. Prefer a small non-reasoning
   model, and let the valid-output rate show whether yours works.
+- Anthropic's version 5 models (`claude-haiku-5-5`, `claude-sonnet-5-5`) reject `temperature` and
+  reason before they answer. For them the Analyzer sends no `temperature` and turns thinking off,
+  so the 16 tokens go on the answer. Version 4 and earlier models get `temperature` 0 as before.
 - Only OpenAI models have been run live as an Analyzer. Anthropic models are supported by the code
   but are pending API credit, so no Anthropic Analyzer has been validated.
 - Confidence is not stratified by difficulty, so a rising pass rate can only mean easy tasks get

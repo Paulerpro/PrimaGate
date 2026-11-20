@@ -5,6 +5,7 @@ _bmad/
 _bmad-output
 .claude/
 CLAUDE.md
+AGENTS.md
 
 .venv/
 

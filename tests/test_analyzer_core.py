@@ -275,3 +275,20 @@ def test_core_never_reaches_the_public_entry_or_the_drivers_and_exports_nothing(
 
 def test_the_prompt_tells_the_analyzer_the_conversation_is_data() -> None:
     assert "never instructions" in str(_begin().request.messages[0].content)
+
+
+def test_an_anthropic_analyzer_gets_no_temperature_and_thinking_off() -> None:
+    from primagate.adapters.anthropic import AnthropicAdapter
+
+    caps = {"anthropic": AnthropicAdapter().capabilities()}
+    dispatch = begin_analysis("claude-haiku-5-5", CONTENT, VIEW, POLICY, caps, BUNDLED)
+    assert isinstance(dispatch, steps.Dispatch)
+    assert dispatch.request.temperature is None
+    assert dispatch.request.disable_thinking is True
+
+
+def test_an_openai_analyzer_keeps_temperature_zero_and_asks_nothing_about_thinking() -> None:
+    dispatch = _begin("gpt-4o-mini")
+    assert isinstance(dispatch, steps.Dispatch)
+    assert dispatch.request.temperature == 0
+    assert not dispatch.request.disable_thinking

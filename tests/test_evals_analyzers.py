@@ -857,12 +857,9 @@ def test_the_guide_and_the_readmes_cover_the_comparison() -> None:
 
 
 def test_the_guide_states_the_real_analyzer_request_settings() -> None:
-    import inspect
-
     from primagate.core import analyzer as core
 
     guide = (ROOT / "docs" / "analyzer-guide.md").read_text(encoding="utf-8")
-    assert "temperature=0" in inspect.getsource(core.begin_analysis)
     assert "`temperature` 0" in guide
     assert f"`max_tokens` ({core._MAX_ANSWER_TOKENS})" in guide
 

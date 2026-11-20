@@ -16,7 +16,7 @@ from primagate import (
 from primagate.core import prices
 from primagate.core.analyzer import ANALYZER_PROMPT_VERSION
 
-from .support import ASK, Live, LiveCaller, LiveOutage
+from .support import ASK, Live, LiveCaller
 
 pytestmark = pytest.mark.live
 
@@ -60,8 +60,13 @@ def test_a_real_analyzer_routes_the_call_and_the_decision_is_logged(
     if degraded:
         (event,) = degraded
         if event.reason == "provider_error":
-            # Routing absorbed the Analyzer's failure, so the provider is what failed.
-            raise LiveOutage("the Analyzer's provider could not answer")
+            # Routing absorbed the Analyzer's error and the event does not say what it was. A plain
+            # call to the same model tells the two causes apart: it raises when the provider is
+            # down, and when it answers, the Analyzer's own request was what got refused.
+            call(live.gate(), model=live.model, messages=ASK)
+            raise AssertionError(
+                "the Analyzer degraded with provider_error but the provider answers a plain call"
+            )
         # Any other reason (an answer that is not exactly "<TIER> <confidence>", or a Tier that
         # is not enabled) is never read for a label: the Interim Binding serves the call.
         assert meta.tier == POLICY["interim_binding"]
