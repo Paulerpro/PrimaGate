@@ -54,8 +54,9 @@ MAX_EXCHANGES = 3
 MIN_CALIBRATION = 20
 # A short answer is enough to check by rule and keeps a full run cheap.
 MAX_TOKENS = 64
-# Version 2 added `profile_not_ready` to each call and the `experiments` section.
-RESULTS_VERSION = 2
+# Version 2 added `profile_not_ready` to each call and the `experiments` section. Version 3 added
+# the `analyzer_comparison` section.
+RESULTS_VERSION = 3
 # The README's estimate for a full run: about 300 calls for 10 to 30 US cents.
 MAIN_RUN_CALLS = 300
 MAIN_RUN_CENTS = (10.0, 30.0)
@@ -650,6 +651,7 @@ def results_data(
     offline: bool,
     when: datetime,
     experiments: dict[str, Any] | None = None,
+    analyzer_comparison: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Every call's outcome as plain facts, for the stories that build on this run.
 
@@ -670,6 +672,7 @@ def results_data(
         },
         "calls": calls,
         "experiments": experiments or {},
+        "analyzer_comparison": analyzer_comparison or {},
     }
 
 
@@ -790,6 +793,23 @@ _PREPARED = {
 }
 # The stand-in Analyzer's confidence cycles over these, so every bucket has calls to count.
 _CONFIDENCE = (0.95, 0.9, 0.8, 0.6, 0.4)
+# How other Analyzer models behave in the stand-in, so a comparison has different numbers to read.
+# A model not listed here behaves like the default Analyzer.
+_ANALYZER_QUIRKS: dict[str, dict[str, Any]] = {
+    # Surer of itself, a little slower and dearer to run, and it over-escalates now and then.
+    "gpt-4.1-mini": {
+        "confidence": (0.95, 0.9, 0.85, 0.75, 0.65),
+        "delay": 0.004,
+        "usage": (320, 4),
+        "escalate_every": 5,
+    },
+    # Often answers in a sentence, which the strict parser refuses.
+    "stand-in-flaky": {"malformed_every": 3},
+    # Never answers in a form the parser accepts.
+    "stand-in-broken": {"malformed_every": 1},
+    # Never tells the tasks apart.
+    "stand-in-medium": {"always": "MEDIUM"},
+}
 
 
 def _find(text: str) -> tuple[int, Task] | None:
@@ -846,8 +866,11 @@ def stand_in(request: httpx2.Request) -> httpx2.Response:
         usage = (400, 60)
         call = None
     elif "Prompt version: analyzer" in system:
+        quirk = _ANALYZER_QUIRKS.get(model, {})
         tier = _DIFFICULTY_TIER[task.difficulty] if task else "MEDIUM"
-        confidence = _CONFIDENCE[index % len(_CONFIDENCE)]
+        confidence = quirk.get("confidence", _CONFIDENCE)[index % len(_CONFIDENCE)]
+        if quirk.get("delay"):
+            time.sleep(quirk["delay"])
         if "Purpose:" in system:
             # An Analyzer that knows the app is surer of its choice.
             confidence = max(confidence, 0.85)
@@ -855,8 +878,14 @@ def stand_in(request: httpx2.Request) -> httpx2.Response:
             # Without the earlier exchanges it cannot tell the question is a follow-up, so it
             # takes the cheapest Tier.
             tier = "SMALL"
+        if quirk.get("always"):
+            tier = quirk["always"]
+        if quirk.get("escalate_every") and index % quirk["escalate_every"] == 0:
+            tier = "POWERFUL"
         reply = f"{tier} {confidence}"
-        usage = (300, 4)
+        if quirk.get("malformed_every") and index % quirk["malformed_every"] == 0:
+            reply = f"I would pick {tier} for this one"
+        usage = quirk.get("usage", (300, 4))
         call = None
     else:
         known = task is not None and task.difficulty in _SKILL.get(model, {"easy"})
@@ -898,6 +927,8 @@ def build_gate(
     *,
     profile_sources: dict[str, Any] | None = None,
     context_exchanges: int | None = None,
+    api_keys: dict[str, str] | None = None,
+    base_urls: dict[str, str] | None = None,
 ) -> PrimaGate:
     policy: dict[str, Any] = {
         "enabled_tiers": ["SMALL", "MEDIUM", "POWERFUL"],
@@ -911,7 +942,8 @@ def build_gate(
     if profile_sources is not None:
         extra["profile_sources"] = profile_sources
     return PrimaGate(
-        api_keys={"openai": key},
+        api_keys=api_keys if api_keys is not None else {"openai": key},
+        base_urls=base_urls,
         transport=transport,
         tier_bindings={
             "SMALL": {"model": config.small},
@@ -961,6 +993,20 @@ def _parser() -> argparse.ArgumentParser:
         help="also run an isolation experiment against the routed arm",
     )
     parser.add_argument(
+        "--compare-analyzers",
+        nargs="?",
+        const=",".join(analyzers.DEFAULT_CANDIDATES),
+        metavar="A,B[,C...]",
+        help="a run of its own: ask the routed arm once per candidate Analyzer (2 to 6) and "
+        "compare them; no baseline arm is run",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="send every OpenAI call of the comparison, including the worker calls, to this "
+        "OpenAI-compatible endpoint",
+    )
+    parser.add_argument(
         "--profile-timeout",
         type=float,
         default=60.0,
@@ -989,20 +1035,33 @@ def main(argv: list[str] | None = None) -> int:
     if not 0.0 < args.threshold <= 1.0:
         parser.error("--threshold must be above 0 and at most 1")
     if args.score_rating:
-        if args.offline or args.experiment or args.export_rating or args.api_key:
+        if (
+            args.offline
+            or args.experiment
+            or args.export_rating
+            or args.api_key
+            or args.compare_analyzers is not None
+        ):
             # Scoring only reads files, so a run flag beside it would be silently ignored.
             parser.error(
                 "--score-rating cannot be combined with --offline, --api-key, "
-                "--experiment or --export-rating"
+                "--experiment, --export-rating or --compare-analyzers"
             )
         # Reads files only, so it needs no key and makes no call.
         return _score(Path(args.score_rating))
     if not math.isfinite(args.profile_timeout) or args.profile_timeout <= 0:
         parser.error("--profile-timeout must be a finite number above 0")
+    if args.base_url and args.compare_analyzers is None:
+        parser.error("--base-url only applies to --compare-analyzers")
+    if args.compare_analyzers is not None and (args.experiment or args.export_rating):
+        # The comparison is a run of its own, with no baseline arm, so these have nothing to act on.
+        parser.error("--compare-analyzers cannot be combined with --experiment or --export-rating")
     config = Config(
         args.small, args.medium, args.powerful, args.analyzer, args.baseline, args.threshold
     )
     key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
+    if args.compare_analyzers is not None:
+        return _compare(parser, args, config, key)
     if not args.offline and not key:
         # Before any call, so a missing key costs nothing.
         print(
@@ -1084,6 +1143,75 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if ran_ok else 1
 
 
+def _compare(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config, key: str
+) -> int:
+    """The Analyzer comparison as a run of its own: no baseline arm, no main evaluation."""
+    try:
+        candidates = analyzers.parse_candidates(args.compare_analyzers)
+    except ValueError as err:
+        parser.error(str(err))
+    unknown = [name for name in candidates if analyzers.provider_of(name) is None]
+    if unknown:
+        # Before any call, like a missing key: the SDK would refuse the name anyway.
+        print(
+            f"Unknown provider prefix in: {', '.join(unknown)}. Use openai/ or anthropic/.",
+            file=sys.stderr,
+        )
+        return 2
+    env = {name: os.environ.get(name, "") for name in analyzers.KEY_VARIABLES.values()}
+    env["OPENAI_API_KEY"] = key
+    workers = (config.small, config.medium, config.powerful)
+    lacking = [] if args.offline else analyzers.missing_keys(candidates, workers, env)
+    if lacking:
+        print(f"No key for a candidate's provider: set {', '.join(lacking)}.", file=sys.stderr)
+        return 2
+    keys = {"openai": "offline-key" if args.offline else key}
+    if args.offline:
+        keys["anthropic"] = "offline-key"
+    elif env["ANTHROPIC_API_KEY"]:
+        keys["anthropic"] = env["ANTHROPIC_API_KEY"]
+    if not args.offline:
+        print(f"The comparison costs {analyzers.cost_note()}.", file=sys.stderr)
+    urls = {"openai": args.base_url} if args.base_url else None
+    transport = httpx2.MockTransport(stand_in) if args.offline else None
+    when = datetime.now(UTC)
+    try:
+        compared = analyzers.run_comparison(config, candidates, keys, transport, urls)
+        section = analyzers.comparison_section(config, compared, args.offline)
+        data = results_data(
+            config,
+            [],
+            [],
+            args.offline,
+            when,
+            None,
+            analyzers.comparison_data(config, compared, args.offline),
+        )
+        title = f"# Analyzer comparison {when:%Y-%m-%d %H:%M} UTC"
+        report = "\n".join([title, "", section])
+        results = json.dumps(data, indent=2) + "\n"
+        done = analyzers.all_answered(compared)
+    except Exception as err:
+        print(f"The comparison failed: {type(err).__name__}", file=sys.stderr)
+        return 1
+    print(report)
+    name = re.sub(r"[^A-Za-z0-9.-]", "-", "-".join(candidates))
+    stem = f"{'offline-' if args.offline else ''}analyzers-{name}-{when:%Y%m%d-%H%M%S}"
+    report_path = Path(args.out_dir) / f"{stem}.md"
+    results_path = Path(args.out_dir) / f"{stem}.json"
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report, encoding="utf-8", newline="\n")
+        results_path.write_text(results, encoding="utf-8", newline="\n")
+    except OSError as err:
+        print(f"Could not write the report: {type(err).__name__}", file=sys.stderr)
+        return 1
+    print(f"Report written to {report_path}")
+    print(f"Results written to {results_path}")
+    return 0 if done else 1
+
+
 def _score(path: Path) -> int:
     try:
         scored = rating.score(path)
@@ -1095,6 +1223,7 @@ def _score(path: Path) -> int:
 
 
 # Imported last: both modules take their shared pieces from this one, which is complete by here.
+import analyzers  # noqa: E402
 import experiments  # noqa: E402
 import rating  # noqa: E402
 

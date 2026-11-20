@@ -157,6 +157,30 @@ Experiments then run, and their sections are appended to the saved report and re
 experiment fails or an arm answers nothing, the run exits 1, as it does for `NOT RUN: Profile not
 ready`; the main results are already kept. `--profile-timeout` must be a finite number above 0.
 
+## Analyzer comparison
+
+```
+uv run python evals/harness.py --compare-analyzers gpt-4o-mini,gpt-4.1-mini
+```
+
+is a run of its own. It asks the routed arm once per candidate Analyzer, changing only the
+Analyzer, and runs no baseline arm and no main evaluation. It reports cost per routing call, added
+latency, valid-output rate, Tier-to-difficulty correlation and calibration, plus a
+`confidence_threshold` table for each candidate. It needs 2 to 6 candidates and uses the two above
+when none are named. It cannot be combined with `--experiment`, `--export-rating` or
+`--score-rating`. `--base-url` is only for this flag, and it sends every OpenAI call, including the
+worker calls, to that OpenAI-compatible endpoint. A missing key or an unknown provider prefix stops
+the run before any call (exit 2); a candidate that answers nothing usable is listed as failed and
+the rest are still compared (exit 1). Read [docs/analyzer-guide.md](../docs/analyzer-guide.md) for
+how to read the result. The report and results are saved as `analyzers-*.md` and `.json`.
+
+**Cost.** The comparison makes about 200 calls per candidate (100 tasks, each with its Analyzer
+call), roughly 7 to 20 US cents each at the default models. An estimate, not a bill.
+
+The results file is results format version 3. Version 3 adds a top-level `analyzer_comparison`
+object, empty unless the comparison ran: per candidate its criteria, threshold table, suggestion,
+calibration buckets and `calls` in the usual record format. It holds no key, prompt or reply.
+
 ## Human-rated sample
 
 Automatic checks say whether an answer matches a rule. A person rates a sample too, to see how far

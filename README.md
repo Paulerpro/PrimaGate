@@ -906,8 +906,9 @@ down for the Analyzer.
 The Analyzer must answer with exactly one Tier word and a confidence, like `MEDIUM 0.82`. Anything
 else, including the right words inside a longer reply, is treated as a failed analysis and never
 guessed at. An answer below your `confidence_threshold` is not a failure: it takes your
-`ambiguous_context_default`. The Analyzer's own cost is reported on its own line, apart from the
-cost of your worker model.
+`ambiguous_context_default`. To choose an Analyzer and a `confidence_threshold` from measured
+evidence, see [docs/analyzer-guide.md](docs/analyzer-guide.md). The Analyzer's own cost is reported
+on its own line, apart from the cost of your worker model.
 
 Each instance holds a Profile store, kept in memory by default and shared by `completion` and
 `acompletion`. The default in-memory store writes nothing to disk, so it is empty after a restart.

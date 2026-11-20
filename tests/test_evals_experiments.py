@@ -374,7 +374,7 @@ def test_all_runs_both_experiments_and_the_control_arm_once(
     assert "## Profile experiment" in text and "## History experiment" in text
     (results,) = tmp_path.glob("offline-harness-*.json")
     data = json.loads(results.read_text(encoding="utf-8"))
-    assert data["version"] == harness.RESULTS_VERSION == 2
+    assert data["version"] == harness.RESULTS_VERSION == 3
     assert set(data["experiments"]) == {"profile", "history"}
     assert data["experiments"]["profile"]["status"] == "ran"
     assert len(data["experiments"]["profile"]["calls"]) == 100
@@ -922,7 +922,7 @@ def test_the_main_report_is_saved_before_the_experiments_and_survives_their_fail
     assert code == 1 and "RuntimeError" in captured.err and "experiment broke" not in captured.err
     assert "# Tier Routing evaluation" in captured.out
     (results,) = tmp_path.glob("offline-harness-*.json")
-    assert json.loads(results.read_text(encoding="utf-8"))["version"] == 2
+    assert json.loads(results.read_text(encoding="utf-8"))["version"] == 3
     assert len(list(tmp_path.glob("offline-harness-*.md"))) == 1
 
 
