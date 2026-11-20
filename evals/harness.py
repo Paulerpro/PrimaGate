@@ -24,9 +24,20 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
-from workload import TASKS, Task
 
-from primagate import TIER_ROUTING_ALIAS, Event, PrimaGate, RoutingDecision, RoutingDegraded
+# Put first so the script finds its siblings however it is started, including with `-I`, which
+# leaves the script's own folder off the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from workload import TASKS, Task  # noqa: E402
+
+from primagate import (  # noqa: E402
+    TIER_ROUTING_ALIAS,
+    Event,
+    PrimaGate,
+    RoutingDecision,
+    RoutingDegraded,
+)
 
 # SM-4: cost down by at least this many percent, with Usefulness down by at most this many points.
 COST_TARGET = 30.0
@@ -43,7 +54,11 @@ MAX_EXCHANGES = 3
 MIN_CALIBRATION = 20
 # A short answer is enough to check by rule and keeps a full run cheap.
 MAX_TOKENS = 64
-RESULTS_VERSION = 1
+# Version 2 added `profile_not_ready` to each call and the `experiments` section.
+RESULTS_VERSION = 2
+# The README's estimate for a full run: about 300 calls for 10 to 30 US cents.
+MAIN_RUN_CALLS = 300
+MAIN_RUN_CENTS = (10.0, 30.0)
 
 OFFLINE_BANNER = "OFFLINE STAND-IN: not evidence"
 TYPES = ("oneshot", "tool", "multiturn")
@@ -93,6 +108,11 @@ class CallResult:
     @property
     def degraded(self) -> bool:
         return self.degraded_reason is not None
+
+    @property
+    def not_ready(self) -> bool:
+        # Served by the Interim Binding because the Profile was not READY, so no Analyzer ran.
+        return self.degraded_reason in ("preparing", "preparation_failed")
 
     @property
     def fallback(self) -> bool:
@@ -597,42 +617,45 @@ def render_report(
     return "\n".join(lines)
 
 
+def call_record(r: CallResult) -> dict[str, Any]:
+    """One call as plain facts: ids, numbers and names, never a prompt or a reply."""
+    return {
+        "task_id": r.task.id,
+        "type": r.task.type,
+        "difficulty": r.task.difficulty,
+        "arm": r.arm,
+        "passed": r.passed,
+        "worker_cost": r.worker_cost,
+        "analyzer_cost": r.analyzer_cost,
+        "first_latency": r.first_latency,
+        "latency": r.latency,
+        "analyzer_latency": r.analyzer_latency,
+        "tier": r.tier,
+        "confidence": r.confidence,
+        "degraded_reason": r.degraded_reason,
+        "profile_not_ready": r.not_ready,
+        "attempts": r.attempts,
+        "fallback": r.fallback,
+        "omitted": r.omitted,
+        "over_budget": r.over_budget,
+        "finish_reason": r.finish_reason,
+        "error": r.error,
+    }
+
+
 def results_data(
     config: Config,
     routed: list[CallResult],
     baseline: list[CallResult],
     offline: bool,
     when: datetime,
+    experiments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Every call's outcome as plain facts, for the stories that build on this run.
 
     It holds no key and no prompt or reply text: only ids, numbers, names of tiers and errors.
     """
-    calls = []
-    for r in (*routed, *baseline):
-        calls.append(
-            {
-                "task_id": r.task.id,
-                "type": r.task.type,
-                "difficulty": r.task.difficulty,
-                "arm": r.arm,
-                "passed": r.passed,
-                "worker_cost": r.worker_cost,
-                "analyzer_cost": r.analyzer_cost,
-                "first_latency": r.first_latency,
-                "latency": r.latency,
-                "analyzer_latency": r.analyzer_latency,
-                "tier": r.tier,
-                "confidence": r.confidence,
-                "degraded_reason": r.degraded_reason,
-                "attempts": r.attempts,
-                "fallback": r.fallback,
-                "omitted": r.omitted,
-                "over_budget": r.over_budget,
-                "finish_reason": r.finish_reason,
-                "error": r.error,
-            }
-        )
+    calls = [call_record(r) for r in (*routed, *baseline)]
     return {
         "version": RESULTS_VERSION,
         "created": when.isoformat(),
@@ -646,6 +669,7 @@ def results_data(
             "threshold": config.threshold,
         },
         "calls": calls,
+        "experiments": experiments or {},
     }
 
 
@@ -756,6 +780,14 @@ _SKILL = {
     "gpt-4.1-mini": {"easy", "medium"},
     "gpt-4o": {"easy", "medium", "hard"},
 }
+# What the stand-in's preparation step writes, so a Profile the Analyzer can read exists offline.
+_PREPARED = {
+    "purpose": "Answers short factual and arithmetic questions and calls tools on request.",
+    "interactions": ["one-shot questions", "multi-turn follow-ups", "tool requests"],
+    "constraints": ["replies are short"],
+    "capabilities": ["arithmetic", "general knowledge", "tool calls"],
+    "unknowns": ["none stated"],
+}
 # The stand-in Analyzer's confidence cycles over these, so every bucket has calls to count.
 _CONFIDENCE = (0.95, 0.9, 0.8, 0.6, 0.4)
 
@@ -806,11 +838,24 @@ def stand_in(request: httpx2.Request) -> httpx2.Response:
     model = body["model"]
     messages = body["messages"]
     system = str(messages[0].get("content", ""))
-    found = _find(str(messages[-1].get("content", "")))
+    last = str(messages[-1].get("content", ""))
+    found = _find(last)
     index, task = found if found else (0, None)
-    if "Prompt version: analyzer" in system:
+    if "Prompt version: prep" in system:
+        reply = json.dumps(_PREPARED)
+        usage = (400, 60)
+        call = None
+    elif "Prompt version: analyzer" in system:
         tier = _DIFFICULTY_TIER[task.difficulty] if task else "MEDIUM"
-        reply = f"{tier} {_CONFIDENCE[index % len(_CONFIDENCE)]}"
+        confidence = _CONFIDENCE[index % len(_CONFIDENCE)]
+        if "Purpose:" in system:
+            # An Analyzer that knows the app is surer of its choice.
+            confidence = max(confidence, 0.85)
+        if task is not None and task.type == "multiturn" and task.history[-1][0] not in last:
+            # Without the earlier exchanges it cannot tell the question is a follow-up, so it
+            # takes the cheapest Tier.
+            tier = "SMALL"
+        reply = f"{tier} {confidence}"
         usage = (300, 4)
         call = None
     else:
@@ -846,8 +891,25 @@ def stand_in(request: httpx2.Request) -> httpx2.Response:
 
 
 def build_gate(
-    config: Config, key: str, transport: httpx2.BaseTransport | None, probe: Probe
+    config: Config,
+    key: str,
+    transport: httpx2.BaseTransport | None,
+    probe: Probe,
+    *,
+    profile_sources: dict[str, Any] | None = None,
+    context_exchanges: int | None = None,
 ) -> PrimaGate:
+    policy: dict[str, Any] = {
+        "enabled_tiers": ["SMALL", "MEDIUM", "POWERFUL"],
+        "confidence_threshold": config.threshold,
+        "context_token_budget": 2000,
+        "interim_binding": "MEDIUM",
+    }
+    if context_exchanges is not None:
+        policy["context_exchanges"] = context_exchanges
+    extra: dict[str, Any] = {}
+    if profile_sources is not None:
+        extra["profile_sources"] = profile_sources
     return PrimaGate(
         api_keys={"openai": key},
         transport=transport,
@@ -856,14 +918,10 @@ def build_gate(
             "MEDIUM": {"model": config.medium},
             "POWERFUL": {"model": config.powerful},
         },
-        policy={
-            "enabled_tiers": ["SMALL", "MEDIUM", "POWERFUL"],
-            "confidence_threshold": config.threshold,
-            "context_token_budget": 2000,
-            "interim_binding": "MEDIUM",
-        },
+        policy=policy,
         analyzer=config.analyzer,
         event_handler=probe,
+        **extra,
     )
 
 
@@ -897,6 +955,27 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline", default=Config.baseline)
     parser.add_argument("--threshold", type=float, default=Config.threshold)
     parser.add_argument("--out-dir", default=str(Path(__file__).parent / "results"))
+    parser.add_argument(
+        "--experiment",
+        choices=("profile", "history", "all"),
+        help="also run an isolation experiment against the routed arm",
+    )
+    parser.add_argument(
+        "--profile-timeout",
+        type=float,
+        default=60.0,
+        help="seconds to wait for the Profile to become ready in the Profile experiment",
+    )
+    parser.add_argument(
+        "--export-rating",
+        action="store_true",
+        help="after the run, write 50 responses to rate by hand and a key file",
+    )
+    parser.add_argument(
+        "--score-rating",
+        metavar="CSV",
+        help="score a rated file against its key; makes no call and needs no key",
+    )
     return parser
 
 
@@ -909,6 +988,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not 0.0 < args.threshold <= 1.0:
         parser.error("--threshold must be above 0 and at most 1")
+    if args.score_rating:
+        if args.offline or args.experiment or args.export_rating or args.api_key:
+            # Scoring only reads files, so a run flag beside it would be silently ignored.
+            parser.error(
+                "--score-rating cannot be combined with --offline, --api-key, "
+                "--experiment or --export-rating"
+            )
+        # Reads files only, so it needs no key and makes no call.
+        return _score(Path(args.score_rating))
+    if not math.isfinite(args.profile_timeout) or args.profile_timeout <= 0:
+        parser.error("--profile-timeout must be a finite number above 0")
     config = Config(
         args.small, args.medium, args.powerful, args.analyzer, args.baseline, args.threshold
     )
@@ -921,7 +1011,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     transport = httpx2.MockTransport(stand_in) if args.offline else None
-    routed, fixed = run(config, "offline-key" if args.offline else key, transport)
+    used_key = "offline-key" if args.offline else key
+    extra = experiments.extra_calls(args.experiment)
+    if extra and not args.offline:
+        # Told up front, since the experiments are paid for on top of the main run.
+        low, high = (extra * cents / MAIN_RUN_CALLS for cents in MAIN_RUN_CENTS)
+        print(
+            f"The experiments add about {extra} extra calls, roughly {low:.0f} to {high:.0f} US "
+            "cents at the default models (an estimate, not a bill).",
+            file=sys.stderr,
+        )
+    routed, fixed = run(config, used_key, transport)
     when = datetime.now(UTC)
     report = render_report(config, routed, fixed, args.offline, when)
     # Printed first, so a result that cost money is never lost to a write that fails.
@@ -935,24 +1035,71 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report, encoding="utf-8", newline="\n")
-        data = results_data(config, routed, fixed, args.offline, when)
-        results_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+        results_path.write_text(
+            json.dumps(results_data(config, routed, fixed, args.offline, when), indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
     except OSError as err:
         print(f"Could not write the report: {type(err).__name__}", file=sys.stderr)
         return 1
     print(f"Report written to {report_path}")
     print(f"Results written to {results_path}")
+    if args.export_rating:
+        try:
+            made = rating.export(
+                routed, fixed, Path(args.out_dir), args.offline, when, results_path.name
+            )
+        except (OSError, rating.RatingError) as err:
+            print(f"Could not write the rating files: {type(err).__name__}", file=sys.stderr)
+            return 1
+        print(made.note)
+        print(f"Rating file written to {made.csv}")
+        print(f"Key file written to {made.key}; keep it away from the rater")
     silent = [name for name, rows in (("routed", routed), ("fixed", fixed)) if not _answered(rows)]
     if silent:
-        # An arm that answered nothing is most likely a bad key or model name.
+        # Before any experiment: an arm that answered nothing is most likely a bad key or model
+        # name, and the experiments would only pay for more of the same.
         print(
             f"No call was answered in the {' and '.join(silent)} arm. Check the key and the "
             "model names.",
             file=sys.stderr,
         )
         return 1
+    if not args.experiment:
+        return 0
+    try:
+        sections, experiment_data, ran_ok = experiments.run_requested(
+            args.experiment, config, routed, used_key, transport, args.profile_timeout, args.offline
+        )
+        report = "\n".join([report, *sections])
+        print("\n".join(sections))
+        report_path.write_text(report, encoding="utf-8", newline="\n")
+        data = results_data(config, routed, fixed, args.offline, when, experiment_data)
+        results_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+    except Exception as err:
+        # The main results are already saved above, so only the experiment is lost.
+        print(f"The experiment failed: {type(err).__name__}", file=sys.stderr)
+        return 1
+    return 0 if ran_ok else 1
+
+
+def _score(path: Path) -> int:
+    try:
+        scored = rating.score(path)
+    except rating.RatingError as err:
+        print(str(err), file=sys.stderr)
+        return 1
+    print(scored.render())
     return 0
 
 
+# Imported last: both modules take their shared pieces from this one, which is complete by here.
+import experiments  # noqa: E402
+import rating  # noqa: E402
+
 if __name__ == "__main__":
-    sys.exit(main())
+    # Run as the module the experiments import, so both share one set of classes.
+    import harness
+
+    sys.exit(harness.main())

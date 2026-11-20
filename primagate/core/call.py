@@ -689,7 +689,9 @@ def start(
 
         if tiers.analyzer is None:
             return give_up("no_analyzer")
-        view = bounded_context(request, tiers.policy.context_token_budget)
+        view = bounded_context(
+            request, tiers.policy.context_token_budget, tiers.policy.context_exchanges
+        )
         if isinstance(view, OverBudget):
             return give_up("over_budget")
         content = profile.content if profile else ProfileContent(unknowns=PLACEHOLDER_UNKNOWNS)

@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any
 
@@ -74,3 +75,47 @@ def test_a_cost_preference_outside_the_three_is_refused_at_setup(preference: obj
     policy = {**REQUIRED, "cost_preference": preference}
     with pytest.raises(errors.BadRequestError, match="cost_preference"):
         PrimaGate(tier_bindings=TWO, policy=policy, analyzer="gpt-4o-mini")
+
+
+HISTORY = [
+    {"role": "user", "content": "first question"},
+    {"role": "assistant", "content": "first answer"},
+    {"role": "user", "content": "second question"},
+    {"role": "assistant", "content": "second answer"},
+    {"role": "user", "content": "third question"},
+]
+
+
+@pytest.mark.fr("FR21", "FR26")
+@pytest.mark.parametrize(
+    ("exchanges", "seen", "unseen"),
+    [
+        (0, ["third question"], ["first answer", "second answer"]),
+        (1, ["second answer", "third question"], ["first answer"]),
+        (None, ["first answer", "second answer", "third question"], []),
+    ],
+    ids=["none", "one", "default"],
+)
+def test_context_exchanges_sets_how_many_earlier_exchanges_the_analyzer_reads(
+    call: Caller, exchanges: int | None, seen: list[str], unseen: list[str]
+) -> None:
+    policy = {**REQUIRED} if exchanges is None else {**REQUIRED, "context_exchanges": exchanges}
+    run = Run(["SMALL 0.9"], policy=policy)
+    call(run.gate, model=ALIAS, messages=HISTORY)
+    asked = json.dumps(run.analyzed[0]["messages"][1:])
+    assert all(text in asked for text in seen)
+    assert not any(text in asked for text in unseen)
+    # Only the Analyzer's view is trimmed: the worker still gets the whole conversation.
+    assert len(run.workers[0]["messages"]) == len(HISTORY)
+
+
+@pytest.mark.fr("FR21")
+@pytest.mark.mode_independent("setup validation runs when the instance is made, before any call")
+@pytest.mark.parametrize("value", [-1, 4, 1.5, True, "2"])
+def test_a_context_exchanges_outside_zero_to_three_is_refused_at_setup(value: Any) -> None:
+    with pytest.raises(errors.BadRequestError, match="context_exchanges"):
+        PrimaGate(
+            tier_bindings=TWO,
+            policy={**REQUIRED, "context_exchanges": value},
+            analyzer="gpt-4o-mini",
+        )

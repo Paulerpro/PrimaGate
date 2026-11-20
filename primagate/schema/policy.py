@@ -27,6 +27,8 @@ class Policy:
     # Unset until the cap is built, which is where its default is chosen.
     max_concurrent_analyzer_calls: int | None = None
     spending_ceiling: float | None = None
+    # How many earlier exchanges the Analyzer may read, from 0 to 3.
+    context_exchanges: int = 3
     # A short hash of every field above, so a decision can name the exact rules it used.
     version: str = ""
 

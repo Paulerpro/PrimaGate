@@ -685,6 +685,12 @@ Optional:
   It has no effect yet: it is advice for later, and routing does not use it.
 - `ambiguous_context_default`: the Tier used when the Analyzer is not confident enough. `MEDIUM` when
   you leave it out, so a Policy that does not enable `MEDIUM` must set it.
+- `context_exchanges`: how many earlier exchanges the Analyzer may read, a whole number from 0 to 3.
+  3 when you leave it out, which is what every Policy did before this field existed. The
+  current exchange is always sent whole, and the earlier ones are still kept only within
+  `context_token_budget`. 0 shows the Analyzer only the latest request. A value outside 0 to 3,
+  or one that is not a whole number, is refused when the instance is created. Adding the field
+  changed the Policy `version` that recorded decision events carry, once.
 - `max_concurrent_analyzer_calls`: a cap on Analyzer requests in flight at once, counted for each
   `PrimaGate` instance (its sync and async calls together). Left out, the limit is 8, a provisional
   number that will be tuned. Past the limit a call does not wait: it goes to your `interim_binding`

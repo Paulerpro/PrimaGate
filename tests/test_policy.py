@@ -209,6 +209,7 @@ def test_equal_policies_share_a_version_and_any_change_gives_another() -> None:
         {**FULL, "spending_ceiling": 26},
         {**FULL, "interim_binding": "SMALL"},
         {**FULL, "enabled_tiers": ["SMALL", "MEDIUM"]},
+        {**FULL, "context_exchanges": 1},
     ]
     versions = {_policy(p).version for p in changed}
     assert first not in versions and len(versions) == len(changed)
@@ -244,7 +245,7 @@ def test_any_mapping_is_accepted_as_a_policy() -> None:
 
 def test_the_version_format_is_pinned() -> None:
     # A golden value: a change here means every recorded version silently stopped matching.
-    assert _policy().version == "e3e4c6c554dd"
+    assert _policy().version == "63a9c54db3c2"
 
 
 def test_an_unknown_key_refusal_lists_the_valid_fields() -> None:
@@ -254,3 +255,26 @@ def test_an_unknown_key_refusal_lists_the_valid_fields() -> None:
 
 def test_the_policy_adds_no_public_name() -> None:
     assert not hasattr(primagate, "Policy")
+
+
+def test_context_exchanges_defaults_to_three_and_takes_zero_to_three() -> None:
+    assert _policy().context_exchanges == 3
+    for n in range(4):
+        assert _policy({**REQUIRED, "context_exchanges": n}).context_exchanges == n
+
+
+def test_spelling_out_the_default_exchange_count_changes_nothing() -> None:
+    assert _policy({**FULL, "context_exchanges": 3}).version == _policy(FULL).version
+
+
+@pytest.mark.parametrize("value", [-1, 4, 1.5, True, None, "2", 2.0])
+def test_a_bad_context_exchanges_is_refused_naming_the_field(value: Any) -> None:
+    with pytest.raises(errors.BadRequestError, match="context_exchanges"):
+        _gate({**REQUIRED, "context_exchanges": value})
+
+
+def test_the_default_exchange_count_is_the_context_maximum() -> None:
+    from primagate.core.context import MAX_EXCHANGES
+
+    # The schema layer cannot import core, so the two copies are pinned together here.
+    assert Policy.__dataclass_fields__["context_exchanges"].default == MAX_EXCHANGES

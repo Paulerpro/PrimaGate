@@ -97,6 +97,113 @@ cost, first-response and completion latency, the Analyzer's added latency, Tier,
 reason a call went to the Interim Binding, the number of attempts and the error class. It holds no
 key, no prompt and no reply text. Later evaluation stories read it instead of parsing the report.
 
+The file is results format version 2. Version 2 adds, to every call, `profile_not_ready` (true when
+the call was served by the Interim Binding while the Profile was `preparing` or had
+`preparation_failed`), and a top-level `experiments` object, empty unless an experiment ran. Each
+experiment in it has a `status` (`ran` or `not_run`), a `reason` (set when it did not run) and its
+`calls`, in the same record format as the main `calls` with the arm named `profile` or
+`no_history`. Nothing else changed from version 1.
+
+## Isolation experiments
+
+The main run measures Tier Routing as a whole. These two experiments change one thing and compare
+the result with the routed arm of the same run. That arm already uses an empty Profile and up to 3
+earlier exchanges, so it is the control and is run once, not again for each experiment. Each
+experiment's own arm is run once, over the same tasks in workload order with the same settings. No
+model judges anything, and the sections report which way a number moved and by how much, with no
+claim about why.
+
+```
+uv run python evals/harness.py --experiment profile
+uv run python evals/harness.py --experiment history
+uv run python evals/harness.py --experiment all
+```
+
+Each adds a section to the report and fills `experiments` in the results file. The control is
+always a fresh routed arm from the same invocation; a saved results file is not reused, because it
+holds no replies and is not guaranteed to match the current settings. `--offline` runs both against
+the scripted stand-in, which behaves differently with a Profile and without history so the sections
+have numbers to show. Offline numbers are never evidence and the report says so.
+
+**Profile experiment.** The real-Profile arm declares `profile_sources`: the harness's own
+instructions and the description of each tool its workload uses. A first routed call, left out of
+the results, starts the preparation, and the arm then waits for the `profile_ready` event, up to
+`--profile-timeout` seconds (60 by default). The wait is not timed or counted as routed calls.
+If the Profile does not become ready (a final `preparation_failed` event, or the timeout) the
+section reads `NOT RUN: Profile not ready` with the reason, nothing else is claimed, and the run
+exits 1. Any call served while the Profile was not ready is flagged (`profile_not_ready`) and its
+task is left out of the comparison in both arms. The section gives, for both arms, total cost,
+Usefulness, Analyzer overhead (cost and added latency), the Tier chosen per difficulty and the
+share of tasks sent to a Tier at least as capable as the task's difficulty needed (an easy task
+needs SMALL, a medium task MEDIUM, a hard task POWERFUL), then the direction and size of each move.
+
+**History experiment.** The no-history arm sets the Policy setting `context_exchanges` to 0, so the
+Analyzer reads only the latest request. Only the 20 multi-turn tasks are run, since only their
+routing can depend on history. The worker still receives the whole conversation, so what changes is
+the Analyzer's view. The section gives, for both arms, Usefulness, total cost and Tier agreement
+(the share sent to exactly the Tier the task's difficulty calls for). With 20 tasks, one task is 5
+points.
+
+**Extra cost.** Each experiment task is one worker call and one Analyzer call, so the Profile
+experiment adds about 200 calls (100 tasks) and the history experiment about 40 (the 20 multi-turn
+tasks), on top of the 300 of the main run, plus the Profile preparation and one warm-up call. With
+a real key the harness prints this count and a rough cost to stderr before it starts, scaled from
+the main run's estimate. The Profile preparation and warm-up are not priced into the section's
+totals, so the real-Profile arm's cost is a lower bound; the warm-up cost is shown.
+
+**Order and failure.** The main report and results file are printed and saved first. A run in
+which either main arm answered nothing stops there with exit 1, before any experiment is paid for.
+Experiments then run, and their sections are appended to the saved report and results. If an
+experiment fails or an arm answers nothing, the run exits 1, as it does for `NOT RUN: Profile not
+ready`; the main results are already kept. `--profile-timeout` must be a finite number above 0.
+
+## Human-rated sample
+
+Automatic checks say whether an answer matches a rule. A person rates a sample too, to see how far
+the rules and a human agree. No judge model is ever used.
+
+```
+uv run python evals/harness.py --export-rating
+```
+
+makes the main run and then writes two files to `evals/results/`:
+
+- `rating-<time>.csv`: 50 responses, drawn from both arms of that run, spread over workload type
+  and difficulty in proportion to their size, with a fixed seed so the same results give the same
+  sample. Each row has a neutral item id, the conversation, the response (a reply, or a tool call
+  with its arguments) and an empty `useful` column. It does not show which arm made a response. If
+  fewer than 50 answered calls exist, it exports those and says so.
+- `rating-<time>.key.json`: the key from item ids to arm and task id, and the results file the run
+  wrote. Keep it away from the person rating.
+
+Open the CSV, and for each row type `yes` if the response is useful for that conversation or `no`
+if it is not. Save it in place and score it:
+
+```
+uv run python evals/harness.py --score-rating evals/results/rating-<time>.csv
+```
+
+This makes no call and needs no key. Any value other than `yes` or `no` (case and spaces do not
+matter), including a blank, is an error that names the row, and nothing is scored. A good file gives
+the number rated and the human-rated Usefulness for each arm, and the agreement rate between the
+human rating and the automatic check, with the task ids of every disagreement.
+
+**Blind rating has limits.** The rater must not open the `.key.json`, and should not be shown the
+results files or reports. The blinding hides the arm, not everything: a response's length or style
+can still hint at which arm made it, and the same task can appear twice, once per arm, so a rater
+may recognise it. Rate each row on its own merits.
+
+**Rating part of the sample.** Delete the rows you do not want to rate; do not leave `useful`
+blank, which is an error. Scoring then reports "N of 50" rated and lists the items with no row,
+so a partial file is never presented as complete. Spreadsheet formulas are defused on export: a
+cell that begins with `=`, `+`, `-`, `@`, a tab or a return gets a leading apostrophe, which is
+only in the file and is ignored when scoring. Save as comma separated UTF-8 CSV. `--score-rating`
+cannot be combined with `--offline`, `--api-key`, `--experiment` or `--export-rating`.
+
+The CSV holds prompts and replies. It stays in `evals/results/`, which git ignores; do not move it
+elsewhere or share it unless you mean to. Reports and results files still hold no prompt or reply.
+The CSV also holds no key.
+
 ## Limits to keep in mind
 
 - The easy, medium and hard labels are an expectation, not a measurement. The report shows the pass

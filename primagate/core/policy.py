@@ -6,6 +6,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from primagate.core.context import MAX_EXCHANGES
 from primagate.schema.errors import BadRequestError
 from primagate.schema.policy import COST_PREFERENCES, Policy
 from primagate.schema.tiers import Tier, TierBinding
@@ -20,6 +21,7 @@ _FIELDS = frozenset(
         "ambiguous_context_default",
         "max_concurrent_analyzer_calls",
         "spending_ceiling",
+        "context_exchanges",
     }
 )
 _REQUIRED = (
@@ -82,6 +84,7 @@ def build_policy(
         "spending_ceiling": (
             _above_zero("spending_ceiling", ceiling) if "spending_ceiling" in raw else None
         ),
+        "context_exchanges": _exchanges(raw.get("context_exchanges", MAX_EXCHANGES)),
     }
     advisories: tuple[str, ...] = ()
     if preference != "balanced":
@@ -145,6 +148,14 @@ def _above_zero(field: str, value: object) -> float:
 def _whole(field: str, value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise BadRequestError(f"policy {field} must be a whole number of 1 or more")
+    return value
+
+
+def _exchanges(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= MAX_EXCHANGES:
+        raise BadRequestError(
+            f"policy context_exchanges must be a whole number from 0 to {MAX_EXCHANGES}"
+        )
     return value
 
 

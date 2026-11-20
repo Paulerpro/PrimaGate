@@ -230,3 +230,37 @@ def test_no_model_is_called_and_nothing_is_wired_or_exported() -> None:
     assert not re.search(r"\b(dispatch|drivers|transport|adapters)\b", source)
     for name in ("RoutingContext", "OverBudget", "bounded_context"):
         assert not hasattr(primagate, name)
+
+
+@pytest.mark.parametrize(("exchanges", "kept"), [(0, 0), (1, 1), (3, 3)])
+def test_the_exchange_count_caps_the_earlier_exchanges_and_never_the_current_one(
+    exchanges: int, kept: int
+) -> None:
+    turns = [_turn(str(i)) for i in range(6)]
+    result = bounded_context(_request(*turns), BIG, exchanges)
+    assert isinstance(result, RoutingContext) and result.earlier_kept == kept
+    assert _texts(result) == [str(m.content) for t in turns[5 - kept :] for m in t]
+
+
+def test_the_exchange_count_defaults_to_three() -> None:
+    turns = [_turn(str(i)) for i in range(6)]
+    assert _built(_request(*turns)).earlier_kept == 3
+
+
+def test_the_budget_still_binds_below_the_exchange_count() -> None:
+    turns = [_turn(str(i)) for i in range(5)]
+    budget = _tokens(turns[4]) + _tokens(turns[3])
+    result = bounded_context(_request(*turns), budget, 3)
+    assert isinstance(result, RoutingContext) and result.earlier_kept == 1
+
+
+@pytest.mark.parametrize("exchanges", [-1, 4, 1.5, True, None, "2"])
+def test_a_bad_exchange_count_is_refused(exchanges: Any) -> None:
+    with pytest.raises(ValueError):
+        bounded_context(_request(_turn("0")), BIG, exchanges)
+
+
+def test_fewer_earlier_exchanges_than_allowed_keeps_them_all() -> None:
+    turns = [_turn(str(i)) for i in range(3)]  # two earlier and a current one
+    assert bounded_context(_request(*turns), BIG, 3).earlier_kept == 2  # type: ignore[union-attr]
+    assert bounded_context(_request(_turn("0")), BIG, 1).earlier_kept == 0  # type: ignore[union-attr]

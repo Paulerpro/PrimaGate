@@ -30,22 +30,32 @@ class OverBudget:
     budget: int
 
 
-def bounded_context(request: ChatCompletionRequest, budget: int) -> RoutingContext | OverBudget:
+def bounded_context(
+    request: ChatCompletionRequest, budget: int, exchanges: int = MAX_EXCHANGES
+) -> RoutingContext | OverBudget:
     """The slice of a request the Analyzer sees, never altering the request itself.
 
     The current exchange is never trimmed. Earlier ones are kept newest first, at most
-    `MAX_EXCHANGES` and within `budget` tokens, and an exchange is dropped whole or not at all.
+    `exchanges` (0 to `MAX_EXCHANGES`) and within `budget` tokens, and an exchange is dropped whole
+    or not at all.
     """
     if not isinstance(budget, int) or isinstance(budget, bool) or budget < 1:
         raise ValueError("budget must be a whole number of 1 or more")
-    exchanges = _exchanges(request.messages)
-    if not exchanges:
+    if (
+        not isinstance(exchanges, int)
+        or isinstance(exchanges, bool)
+        or not 0 <= exchanges <= MAX_EXCHANGES
+    ):
+        raise ValueError(f"exchanges must be a whole number from 0 to {MAX_EXCHANGES}")
+    groups = _exchanges(request.messages)
+    if not groups:
         return RoutingContext((), 0, 0)
-    *earlier, current = exchanges
+    *earlier, current = groups
     used = _tokens(current)
     if used > budget:
         return OverBudget(used, budget)
-    kept = earlier[-MAX_EXCHANGES:]
+    # Sliced from the front: `earlier[-0:]` would be everything, not nothing.
+    kept = earlier[max(len(earlier) - exchanges, 0) :]
     sizes = [_tokens(exchange) for exchange in kept]
     total = used + sum(sizes)
     while kept and total > budget:

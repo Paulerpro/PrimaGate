@@ -38,7 +38,8 @@ The `transport` setting is a test seam and is not covered.
 
 These changes are not breaking:
 
-- Adding a field, an event type or an exception subclass.
+- Adding a field, an event type or an exception subclass. Adding an optional Policy field with a
+  default that keeps today's behaviour is included; it does change the Policy `version` hash once.
   Your event handlers should ignore event types and fields they do not know.
 
 These changes are breaking:
