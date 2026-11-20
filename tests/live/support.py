@@ -49,11 +49,15 @@ TOOLS = [
         },
     }
 ]
-# Asks for the tool call alone, so the answer starts with it and fits under the cap.
+# Asks for the tool first and a short sentence once its result is back. Forbidding text after the
+# call makes a model obey on the second turn too, and an empty reply is then correct behaviour.
 ASK_TOOL = [
     {
         "role": "user",
-        "content": "Call the weather tool for Oslo now. Do not write any text before or after it.",
+        "content": (
+            "Use the weather tool to look up Oslo. Write nothing before the tool call, and after "
+            "its result reply with one short sentence."
+        ),
     }
 ]
 
