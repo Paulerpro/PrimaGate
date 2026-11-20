@@ -129,9 +129,9 @@ class CallCancelled(Event):
 class DecisionEvent(Event):
     """What an operator needs to explain one routing decision, without any conversation content.
 
-    Every field is always present. With no READY Profile, as for an Interim Binding request, the
-    value is "unknown", the word the Tier Binding contract uses for an undisclosed field, so a
-    lookup never meets a missing key.
+    Every field but `confidence` is always present. With no READY Profile, as for an Interim
+    Binding request, the value is "unknown", the word the Tier Binding contract uses for an
+    undisclosed field, so a lookup never meets a missing key.
     """
 
     profile_id: str
@@ -139,6 +139,9 @@ class DecisionEvent(Event):
     prep_prompt_version: str
     analyzer_prompt_version: str
     binding_id: str
+    # The Analyzer's own confidence, 0 to 1, when it gave a verdict; None otherwise. It is a number
+    # and never content. Keyword-only so adding it breaks no caller that builds these positionally.
+    confidence: float | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         # The base has no event_type, so an instance of it could not be logged or serialised.

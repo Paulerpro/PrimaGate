@@ -11,7 +11,7 @@ from primagate.core.profile import PREP_PROMPT_VERSION
 from primagate.core.steps import Action
 from primagate.drivers.providers import parse_fallbacks, parse_tier_bindings
 from primagate.schema import errors, events
-from primagate.schema.analyzer import Analysis, Verdict
+from primagate.schema.analyzer import Analysis, AnalyzerFailure, Verdict
 from primagate.schema.errors import PrimaGateError
 from primagate.schema.policy import TIER_ROUTING_ALIAS, TierRouting
 from primagate.schema.profile import (
@@ -604,3 +604,16 @@ def test_only_a_routed_workers_dispatch_carries_a_spending_ceiling() -> None:
             else steps.EmitOutcome(),
         )
     assert action.dispatch.spending_ceiling is None
+
+
+def test_a_verdict_puts_its_confidence_on_every_decision_event() -> None:
+    made = decision_events("r", M, "MEDIUM:openai/gpt-4o", [S, M], _analysis(S, 0.1, True))
+    assert [e.confidence for e in made] == [0.1] * len(made)  # type: ignore[attr-defined]
+
+
+def test_no_verdict_means_no_confidence() -> None:
+    (only,) = decision_events("r", S, "SMALL:openai/m", [S], None)
+    assert only.confidence is None  # type: ignore[attr-defined]
+    failed = Analysis(AnalyzerFailure("malformed_output"), None)
+    (again,) = decision_events("r", S, "SMALL:openai/m", [S], failed)
+    assert again.confidence is None  # type: ignore[attr-defined]

@@ -139,6 +139,17 @@ def test_the_decision_base_cannot_be_built_and_is_exported() -> None:
     assert primagate.DecisionEvent is events.DecisionEvent
 
 
+@pytest.mark.parametrize("cls", DECISION_CLASSES)
+@pytest.mark.fr("FR36")
+@pytest.mark.mode_independent("checks the event catalog itself; makes no call")
+def test_the_confidence_is_optional_and_shown_only_when_set(
+    cls: type[events.DecisionEvent],
+) -> None:
+    extra = {"reason": "over_budget"} if cls is events.RoutingDegraded else {}
+    assert "confidence" not in cls("req-1", **DECISION, **extra).to_dict()
+    assert cls("req-1", **DECISION, **extra, confidence=0.8).to_dict()["confidence"] == 0.8
+
+
 @pytest.mark.fr("FR36")
 @pytest.mark.mode_independent("checks the event catalog itself; makes no call")
 def test_only_the_decision_types_are_decision_events() -> None:

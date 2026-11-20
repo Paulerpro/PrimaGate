@@ -161,21 +161,24 @@ def decision_events(
     if asked is None:
         asked = analysis is not None
     unknown = "unknown"
-    fields = {
+    fields: dict[str, str] = {
         "profile_id": profile.profile_id if profile else unknown,
         "input_fingerprint": profile.input_fingerprint if profile else unknown,
         "prep_prompt_version": _prep_prompt_version(profile.source_ref) if profile else unknown,
         "analyzer_prompt_version": ANALYZER_PROMPT_VERSION if asked else unknown,
         "binding_id": binding_id,
     }
-    made: list[events.Event] = [events.RoutingDecision(request_id, **fields)]
-    if degraded is not None:
-        made.append(events.RoutingDegraded(request_id, **fields, reason=degraded))
     outcome = analysis.outcome if analysis else None
+    confidence = outcome.confidence if isinstance(outcome, Verdict) else None
+    made: list[events.Event] = [events.RoutingDecision(request_id, **fields, confidence=confidence)]
+    if degraded is not None:
+        made.append(
+            events.RoutingDegraded(request_id, **fields, reason=degraded, confidence=confidence)
+        )
     if isinstance(outcome, Verdict) and outcome.low_confidence_downgrade:
-        made.append(events.LowConfidenceDowngrade(request_id, **fields))
+        made.append(events.LowConfidenceDowngrade(request_id, **fields, confidence=confidence))
     if tier > min(eligible):
-        made.append(events.PremiumRoutingSelected(request_id, **fields))
+        made.append(events.PremiumRoutingSelected(request_id, **fields, confidence=confidence))
     return tuple(made)
 
 

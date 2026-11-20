@@ -511,7 +511,11 @@ stay:
   decision.
 - `binding_id`: the model binding that was chosen.
 
-Each is always a string. `profile_id`, `input_fingerprint` and `prep_prompt_version` name the
+Each is always a string. A further field, `confidence`, is a number from 0 to 1: the confidence the
+Analyzer gave its verdict. It is present only when the Analyzer produced a verdict (a
+`low_confidence_downgrade` carries the low figure it gave) and absent when the Analyzer gave no
+verdict (as when routing degraded), and it holds no content. Reading it is how you check, from your own data, whether a higher confidence goes
+with a better outcome. `profile_id`, `input_fingerprint` and `prep_prompt_version` name the
 Profile pinned for the call (step 18), even when the call then went to the Interim Binding; when
 none was pinned, they are `"unknown"`. Tier Routing emits these events once a call uses the alias;
 the sample below hands in one made-up event so it runs without an Analyzer, to show how to look one

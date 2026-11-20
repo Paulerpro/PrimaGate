@@ -348,3 +348,30 @@ def test_the_response_metadata_round_trips_to_plain_data(call: Caller) -> None:
     result: ChatCompletion = call(Run(["MEDIUM 0.9"]).gate, model=ALIAS, messages=MSGS)
     shown = result.to_dict()["metadata"]
     assert shown["tier"] == "MEDIUM" and shown["analyzer"]["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.fr("FR36")
+def test_a_decision_carries_the_analyzers_confidence_when_it_gave_a_verdict(call: Caller) -> None:
+    run = Run(["MEDIUM 0.9"])
+    call(run.gate, model=ALIAS, messages=MSGS)
+    (decision,) = run.decisions
+    assert decision.confidence == 0.9 and decision.to_dict()["confidence"] == 0.9
+
+
+@pytest.mark.fr("FR36")
+def test_a_low_confidence_downgrade_keeps_the_confidence_the_analyzer_gave(call: Caller) -> None:
+    run = Run(["MEDIUM 0.5"])
+    call(run.gate, model=ALIAS, messages=MSGS)
+    (decision,) = run.decisions
+    (downgrade,) = run.of(events.LowConfidenceDowngrade)
+    assert decision.confidence == downgrade.confidence == 0.5
+
+
+@pytest.mark.fr("FR36")
+def test_a_degraded_call_has_no_confidence_to_report(call: Caller) -> None:
+    run = Run(["not a verdict"])
+    call(run.gate, model=ALIAS, messages=MSGS)
+    (decision,) = run.decisions
+    (degraded,) = run.of(events.RoutingDegraded)
+    assert decision.confidence is None and degraded.confidence is None
+    assert "confidence" not in decision.to_dict() and "confidence" not in degraded.to_dict()
