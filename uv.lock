@@ -553,7 +553,7 @@ dev = [
 requires-dist = [
     { name = "httpx2", specifier = ">=2.13,<3" },
     { name = "tiktoken", marker = "extra == 'tokens'", specifier = ">=0.14,<1" },
-    { name = "typing-extensions", specifier = ">=4.16.0" },
+    { name = "typing-extensions", specifier = ">=4.16.0,<5" },
 ]
 provides-extras = ["tokens"]
 

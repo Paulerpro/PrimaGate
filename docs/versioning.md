@@ -10,6 +10,10 @@ PrimaGate uses semantic versioning. A version number is MAJOR.MINOR.PATCH:
 version, for example `primagate>=0.1,<0.2`, until 1.0 is released. From 1.0 on, a breaking change to
 the public surface needs a new major version.
 
+A release is tagged `v` plus the version, for example `v0.1.0`: digits only, no pre-release suffix,
+and equal to `primagate.__version__`. The release build refuses any other tag. See
+[releasing.md](releasing.md).
+
 ## The public surface
 
 These parts are covered by semantic versioning:

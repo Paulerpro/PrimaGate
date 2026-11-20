@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Paul", email = "nrpaulsilas@gmail.com" }]
 dependencies = [
     "httpx2>=2.13,<3",
-    "typing-extensions>=4.16.0",
+    "typing-extensions>=4.16.0,<5",
 ]
 
 [project.urls]
@@ -35,6 +35,10 @@ dev = [
 
 [tool.hatch.version]
 path = "primagate/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+# The lockfile pins dev and CI only; shipping it would look like a runtime constraint.
+exclude = ["/uv.lock", "/.github"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["primagate"]

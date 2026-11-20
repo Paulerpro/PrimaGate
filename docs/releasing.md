@@ -1,0 +1,59 @@
+# Releasing
+
+A release is a `v*` tag. `.github/workflows/release.yml` then runs the live gate, builds once and
+publishes to PyPI by trusted publishing. No PyPI token or password is stored anywhere.
+
+**Status: the release workflow has never run.** It is unverified until the owner pushes the first
+tag.
+
+## Before the first tag
+
+Do these once.
+
+1. **Register a pending publisher on PyPI.** The project does not exist on PyPI yet, so the first
+   upload needs a pending publisher. On PyPI, open Your projects, then Publishing, and add a GitHub
+   publisher with:
+   - PyPI project name: `primagate`
+   - Owner: `Paulerpro`
+   - Repository: `PrimaGate`
+   - Workflow: `release.yml`
+   - Environment: `pypi`
+2. **Create the `pypi` environment on GitHub.** In the repository settings, add an environment named
+   `pypi`. Consider requiring the owner's approval on it, so a tag alone cannot publish.
+3. **Clear the two blockers that stop the gate passing today.**
+   - GitHub Actions billing is locked, so no workflow, including this one, can run.
+   - The gate requires both providers, and the Anthropic adapter has never run against the real
+     service because there is no Anthropic API credit. Add credit, set spend-limited
+     `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` repository secrets, and read
+     [live-conformance.md](live-conformance.md) first.
+
+## The tag rule
+
+A tag is `v` plus `MAJOR.MINOR.PATCH`, digits only, for example `v0.1.0`. There is no pre-release
+suffix in v1. The tag must equal `v` plus `primagate.__version__`. The build job fails on a tag that
+is not semantic versioning or does not match, before anything is uploaded. Which number to bump
+follows [versioning.md](versioning.md).
+
+## Steps
+
+1. Choose the version by [versioning.md](versioning.md) and set `__version__` in
+   `primagate/__init__.py`.
+2. Merge that change to `main` and check CI is green on the full matrix.
+3. Optionally check locally: `uv build` then
+   `uv run python scripts/check_dist.py --tag v<version>`.
+4. Tag the merge commit `v<version>` and push the tag.
+5. Watch the run. `gate` runs the live suite, `build` runs `uv build` and the dist check and uploads
+   `dist/`, and `publish` uploads exactly those files. If any job fails, nothing is published.
+6. After it publishes, check the version on PyPI and run a clean `pip install primagate` and a first
+   call.
+
+## What the dist check enforces
+
+`scripts/check_dist.py` rejects the build when:
+
+- a runtime dependency in the wheel or the sdist `PKG-INFO` lacks a lower bound (`>=`) or an upper
+  major cap (`<N`), extras included;
+- the sdist contains `uv.lock`. The lockfile stays in the repository for development and CI.
+
+PyPI refuses to upload a version twice. If a release is wrong, fix it and release the next patch
+version.

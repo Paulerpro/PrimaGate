@@ -106,3 +106,8 @@ report. A live test is tagged with FRs like a conformance test, runs in both mod
 
 Read [docs/versioning.md](docs/versioning.md) before you change anything a user can import from
 `primagate`. A breaking change to the public surface needs a new major version.
+
+## Releasing
+
+Only the owner releases. [docs/releasing.md](docs/releasing.md) has the one-time PyPI setup, the
+tag rule and the steps.

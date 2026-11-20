@@ -136,9 +136,10 @@ Use keys made for this purpose only, never a personal or production key.
 
 - weekly, on Monday at 06:00 UTC;
 - by hand, from the Actions tab (`workflow_dispatch`);
-- from another workflow (`workflow_call`). The release workflow that will call it as its gate,
-  run it first and publish only if it passes, does not exist yet: it arrives in Story 8.6. The
-  caller passes the keys with `secrets: inherit`.
+- from another workflow (`workflow_call`). `.github/workflows/release.yml` calls it as the gate of
+  a release: it runs first and publishing happens only if it passes (see
+  [releasing.md](releasing.md)). That workflow has not run yet. The caller passes the keys with
+  `secrets: inherit`.
 
 Scheduled and manual runs require no provider, so a missing secret shows as skipped in the report
 and the run stays green on the providers that have a key. A `workflow_call` requires every provider

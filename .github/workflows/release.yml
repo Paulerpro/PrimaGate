@@ -1,0 +1,55 @@
+name: Release
+
+# A version tag runs the live gate, then builds once, then publishes those exact files.
+# docs/releasing.md lists what must be set up on PyPI and GitHub before the first tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: live gate
+    uses: ./.github/workflows/live.yml
+    secrets: inherit
+
+  build:
+    name: build
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+      - run: uv build
+      # Fails a bad tag or an unbounded dependency before anything is uploaded.
+      - run: uv run --no-project python scripts/check_dist.py --tag "${GITHUB_REF_NAME}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      # PyPI trusts this workflow and environment, and swaps the OIDC token for a short-lived
+      # upload token, so no secret is stored.
+      id-token: write
+    steps:
+      # Publishes the files the build job checked; never rebuilds.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
