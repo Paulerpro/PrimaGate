@@ -20,12 +20,11 @@ Do these once.
    - Environment: `pypi`
 2. **Create the `pypi` environment on GitHub.** In the repository settings, add an environment named
    `pypi`. Consider requiring the owner's approval on it, so a tag alone cannot publish.
-3. **Clear the two blockers that stop the gate passing today.**
+3. **Clear what stops the gate running today.**
    - GitHub Actions billing is locked, so no workflow, including this one, can run.
-   - The gate requires both providers, and the Anthropic adapter has never run against the real
-     service because there is no Anthropic API credit. Add credit, set spend-limited
-     `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` repository secrets, and read
-     [live-conformance.md](live-conformance.md) first.
+   - The gate requires both providers. Set spend-limited `OPENAI_API_KEY` and
+     `ANTHROPIC_API_KEY` repository secrets, and read [live-conformance.md](live-conformance.md)
+     first. The live suite itself passed on both providers in a local run on 2026-11-20.
 
 ## The tag rule
 
@@ -68,7 +67,7 @@ Check each line before the first tag. Nothing here is marked done unless the evi
 | Clean install from PyPI | Pending first publish | Run the `Install check` workflow with the published version |
 | CI matrix green | Pending: Actions billing | A green `CI` run on `main` across every OS and Python version |
 | No critical bug open | Owner checks | The [issue tracker](https://github.com/Paulerpro/PrimaGate/issues) |
-| Live gate | OpenAI pending owner run; Anthropic pending credit | [live-conformance.md](live-conformance.md) |
+| Live gate | Passed locally on 2026-11-20 (OpenAI and Anthropic); not yet run in GitHub Actions | [live-conformance.md](live-conformance.md) |
 
 The `Install check` workflow (`.github/workflows/install-check.yml`) is started by hand from the
 Actions tab with the `version` to test. It creates a fresh virtual environment on Ubuntu, macOS and

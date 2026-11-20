@@ -23,10 +23,8 @@ The first release. Not yet published: see the known blockers below.
 - The package is not on PyPI yet. The clean-install check, `pip install primagate` plus a first
   call on every supported OS and Python version, cannot run until it is.
 - GitHub Actions billing is locked, so the CI matrix has never run green.
-- The Anthropic adapter has never run against the real service, because there is no Anthropic API
-  credit. The live gate cannot pass on Anthropic until it has.
-- The live gate has not been run on OpenAI by the owner yet. See
-  [live-conformance](live-conformance.md).
+- The live suite passed on both OpenAI and Anthropic in the owner's local run on 2026-11-20. It has
+  not run in GitHub Actions yet. See [live-conformance](live-conformance.md).
 - The Tier Routing cost saving has not been measured as evidence. Tier Routing ships as an opt-in
   capability and claims no saving.
 

@@ -95,7 +95,8 @@ compared:
 - Anthropic's version 5 models (`claude-haiku-5-5`, `claude-sonnet-5-5`) reject `temperature` and
   reason before they answer. For them the Analyzer sends no `temperature` and turns thinking off,
   so the 16 tokens go on the answer. Version 4 and earlier models get `temperature` 0 as before.
-- Only OpenAI models have been run live as an Analyzer. Anthropic models are supported by the code
-  but are pending API credit, so no Anthropic Analyzer has been validated.
+- The live Tier Routing test passed with `gpt-4o-mini` and with `claude-haiku-5-5` as the
+  Analyzer. The comparison harness has not been run on an Anthropic Analyzer yet, so there are no
+  measured cost, latency or calibration figures for one.
 - Confidence is not stratified by difficulty, so a rising pass rate can only mean easy tasks get
   high confidence.

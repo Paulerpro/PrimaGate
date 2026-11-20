@@ -193,13 +193,14 @@ that before you share it.
 
 ## Status
 
-- **OpenAI:** not yet run with this suite. It is recorded as passed once the owner runs
-  `uv run pytest -m live` with a key and the report says so. Until GitHub Actions is unlocked, that
-  local run is the only live run.
-- **Anthropic:** pending API credit. The Anthropic adapter has never run against the real service,
-  and the live suite has never run on Anthropic. It is not claimed as passed. Until an Anthropic
-  key is added, scheduled runs show the Anthropic tests as skipped, and the release gate, which
-  requires both providers, fails. That is intended.
+- **OpenAI:** passed in the owner's local run on 2026-11-20: 28 tests, in both modes.
+- **Anthropic:** passed in the same run: 32 tests, in both modes, on `claude-haiku-5-5` with
+  `claude-sonnet-5-5` as the MEDIUM Tier. The first Anthropic run failed the Tier Routing test
+  because Anthropic's version 5 models reject `temperature` and spend a small `max_tokens` on hidden
+  thinking; that is fixed, and the Analyzer now sends neither.
+- **GitHub Actions:** not run yet. These were local runs, and until Actions billing is unlocked and
+  the key secrets are set, the scheduled run and the release gate have not run. The gate requires
+  both providers, so a missing key fails it. That is intended.
 
 The plugin and the report are tested offline in `tests/test_live_report.py`, and the live tests
 skip cleanly without keys.

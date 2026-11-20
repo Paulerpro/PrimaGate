@@ -625,7 +625,7 @@ def test_the_docs_cover_running_cost_keys_report_and_recorded_only_frs() -> None
         "### Set the spend limits",
         "## Read the report",
         "### Recorded only",
-        "Anthropic:** pending API credit",
+        "Anthropic:** passed in the same run",
         "PRIMAGATE_LIVE_REQUIRE",
         "PRIMAGATE_LIVE_REPORT",
     ):
