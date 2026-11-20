@@ -1,0 +1,48 @@
+name: Install check
+
+# Run by hand after a version is on PyPI: it proves the end-user install path, so it is not part
+# of PR CI and cannot pass before the first publish.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version on PyPI to install, for example 0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # uv only supplies the interpreter and the venv; the package itself goes in with pip.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      # A fresh venv with nothing but the published package, as a new user has it. The version
+      # comes in through env so the input is never spliced into the shell text.
+      - name: Install from PyPI into a fresh venv
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv venv --seed --python "${{ matrix.python }}" "$RUNNER_TEMP/venv"
+          if [ -x "$RUNNER_TEMP/venv/bin/python" ]; then PY="$RUNNER_TEMP/venv/bin/python"; else PY="$RUNNER_TEMP/venv/Scripts/python.exe"; fi
+          "$PY" -m pip install "primagate==$VERSION"
+          echo "PY=$PY" >> "$GITHUB_ENV"
+      # -I ignores the checkout, so the script can only see the installed package.
+      - name: First call with a scripted reply
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$PY" -I "$GITHUB_WORKSPACE/scripts/smoke_install.py"

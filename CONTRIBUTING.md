@@ -111,3 +111,8 @@ Read [docs/versioning.md](docs/versioning.md) before you change anything a user 
 
 Only the owner releases. [docs/releasing.md](docs/releasing.md) has the one-time PyPI setup, the
 tag rule and the steps.
+
+## Release notes
+
+[docs/release-notes.md](docs/release-notes.md) lists what each version ships and its known
+blockers. Add an entry there when you change what a release contains.

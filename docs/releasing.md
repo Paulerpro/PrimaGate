@@ -57,3 +57,23 @@ follows [versioning.md](versioning.md).
 
 PyPI refuses to upload a version twice. If a release is wrong, fix it and release the next patch
 version.
+
+## Release readiness
+
+Check each line before the first tag. Nothing here is marked done unless the evidence exists.
+
+| Check | State | How it is settled |
+|-------|-------|-------------------|
+| Docs audit | Automated, passes | `uv run python scripts/check_docs.py`; `uv run pytest` runs it too |
+| Clean install from PyPI | Pending first publish | Run the `Install check` workflow with the published version |
+| CI matrix green | Pending: Actions billing | A green `CI` run on `main` across every OS and Python version |
+| No critical bug open | Owner checks | The [issue tracker](https://github.com/Paulerpro/PrimaGate/issues) |
+| Live gate | OpenAI pending owner run; Anthropic pending credit | [live-conformance.md](live-conformance.md) |
+
+The `Install check` workflow (`.github/workflows/install-check.yml`) is started by hand from the
+Actions tab with the `version` to test. It creates a fresh virtual environment on Ubuntu, macOS and
+Windows for Python 3.11 to 3.14, runs `pip install primagate==<version>`, then runs
+`scripts/smoke_install.py`, which makes a first call with a scripted reply and prints `ok`. It cannot
+pass until a version is on PyPI.
+
+See the [release notes](release-notes.md) for what the first release ships and its known blockers.

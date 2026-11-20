@@ -2,6 +2,13 @@
 
 One call shape for LLM providers, embedded in your process.
 
+## Scope
+
+Stage 1 is this SDK, embedded in your process: calls, reliability routing, opt-in Provider Routing
+and opt-in Tier Routing. Stage 2, a hosted gateway, is a future direction and is not designed here.
+See the [release notes](https://github.com/Paulerpro/PrimaGate/blob/main/docs/release-notes.md) for
+what each version ships and what is still unproven.
+
 ## Quickstart
 
 ### 1. Install
