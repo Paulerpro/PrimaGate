@@ -38,7 +38,7 @@ path = "primagate/__init__.py"
 
 [tool.hatch.build.targets.sdist]
 # The lockfile pins dev and CI only; shipping it would look like a runtime constraint.
-exclude = ["/uv.lock", "/.github"]
+exclude = ["/uv.lock", "/.github", "/AGENTS.md"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["primagate"]
