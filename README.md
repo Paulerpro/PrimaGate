@@ -893,22 +893,26 @@ also turns fallbacks off for plain calls to that model.
 ### 17. What the Analyzer reads
 
 Tier Routing asks one model, the Analyzer, which Tier a request needs. That model is not your
-worker model, and you choose it. It runs in your process with your own keys, and PrimaGate sends
-it only this:
+worker model, and you choose it. It runs in your process with your own keys. Three kinds of text
+reach it, and **all of it goes to whichever Provider hosts the Analyzer model**, so pick an
+Analyzer whose provider you are content to show that text to:
 
-- The Profile of your app: what your instructions, tool descriptions and skill descriptions say
-  about it, once they have been boiled down (step 18): its purpose, the kinds of request, the
-  rules its answers follow, what its tools can do, and what the sources leave unclear. Without
-  `profile_sources`, it only says that all of that is unknown. Preparing the Profile sends the
-  sources themselves to the Analyzer's provider.
-- A bounded slice of the recent conversation: the latest turn in full, plus at most three earlier
-  turns that fit your `context_token_budget` (step 15). That includes the tool calls the assistant
-  made, with their arguments, and the tool results. System and developer messages and images are
-  not included, and nothing is summarised.
+- **Your Profile sources, once, to prepare the Profile.** If you set `profile_sources`, the
+  instructions, tool descriptions and skill descriptions you declared are sent to the Analyzer's
+  provider exactly as you wrote them, not summarised. It boils them down into a Profile (step 18).
+  This happens in the background on the first routed request, and again when a source changes or a
+  failed preparation is retried. Without `profile_sources`, nothing is sent for this.
+- **The Profile of your app, on every routed call once it is ready.** A summary of what your
+  sources say: the app's purpose, the kinds of request, the rules its answers follow, what its
+  tools can do, and what the sources leave unclear. Without `profile_sources`, it only says that
+  all of that is unknown.
+- **A bounded slice of the recent conversation, on every routed call.** The latest turn in full,
+  plus at most three earlier turns that fit your `context_token_budget` (step 15). That includes
+  the tool calls the assistant made, with their arguments, and the tool results. Nothing is
+  summarised. System and developer messages and images are not part of this slice, so your system
+  prompt reaches the Analyzer only through the sources above, and only if you declared it there.
 
-**Both go to whichever Provider hosts the Analyzer model**, so pick an Analyzer whose provider you
-are content to show that text to. The request your worker model receives is never changed or cut
-down for the Analyzer.
+The request your worker model receives is never changed or cut down for the Analyzer.
 
 The Analyzer must answer with exactly one Tier word and a confidence, like `MEDIUM 0.82`. Anything
 else, including the right words inside a longer reply, is treated as a failed analysis and never
@@ -916,21 +920,6 @@ guessed at. An answer below your `confidence_threshold` is not a failure: it tak
 `ambiguous_context_default`. To choose an Analyzer and a `confidence_threshold` from measured
 evidence, see [docs/analyzer-guide.md](docs/analyzer-guide.md). The Analyzer's own cost is reported
 on its own line, apart from the cost of your worker model.
-
-Each instance holds a Profile store, kept in memory by default and shared by `completion` and
-`acompletion`. The default in-memory store writes nothing to disk, so it is empty after a restart.
-Only background preparation (step 18) reads or writes it; a call never does. `profile_store=` is
-there so another store can be plugged in. A custom store needs a `non_blocking` flag and plain (not
-`async def`), thread-safe `read()` and `write(profile)` methods. `read()` returns the stored
-Profile or `None`, and `write` replaces it, so a reader sees the old Profile or the new one, never
-a mix. An error your store raises during preparation ends that preparation as a `store_error`
-failure (step 8); it never reaches your calls. If `non_blocking` is false, `read()` and `write()`
-run in a worker thread when preparing from `acompletion`, so your event loop is never held up.
-
-`profile_store=primagate.FileProfileStore("profile.json")` keeps the Profile in a file, so a
-prepared Profile is reused across restarts with no new Analyzer request, as long as its fingerprint
-still matches. Its format, how it is versioned and its limits when several processes share one
-file are in [docs/profile-store.md](docs/profile-store.md).
 
 ### 18. Background preparation and closing
 
@@ -967,6 +956,21 @@ your own calls.
   together. Once it is ready it is not prepared again in this process. With a file store, a
   matching Profile from an earlier run is loaded silently: no Analyzer request and no preparation
   events.
+- **The Profile store.** Each instance holds a Profile store, kept in memory by default and shared
+  by `completion` and `acompletion`. The default in-memory store writes nothing to disk, so it is
+  empty after a restart. Only background preparation reads or writes it; a call never does.
+  `profile_store=` is there so another store can be plugged in. A custom store needs a
+  `non_blocking` flag and plain (not `async def`), thread-safe `read()` and `write(profile)`
+  methods. `read()` returns the stored Profile or `None`, and `write` replaces it, so a reader sees
+  the old Profile or the new one, never a mix. An error your store raises during preparation ends
+  that preparation as a `store_error` failure (step 8); it never reaches your calls. If
+  `non_blocking` is false, `read()` and `write()` run in a worker thread when preparing from
+  `acompletion`, so your event loop is never held up.
+
+  `profile_store=primagate.FileProfileStore("profile.json")` keeps the Profile in a file, so a
+  prepared Profile is reused across restarts with no new Analyzer request, as long as its
+  fingerprint still matches. Its format, how it is versioned and its limits when several processes
+  share one file are in [docs/profile-store.md](docs/profile-store.md).
 - **When it fails.** A final `preparation_failed` event (step 8) says why. A later routed request
   tries again once 10 minutes have passed since the failure. Sources too large to prepare
   (`overflow`) are not tried again until the process restarts.
