@@ -25,6 +25,9 @@ The first release. Not yet published: see the known blockers below.
 - GitHub Actions billing is locked, so the CI matrix has never run green.
 - The live suite passed on both OpenAI and Anthropic in the owner's local run on 2026-11-20. It has
   not run in GitHub Actions yet. See [live-conformance](live-conformance.md).
+- Claude version 5 models reason before answering, and the reasoning counts against `max_tokens`.
+  A small limit can return no text, with `finish_reason` `"length"`. The README says so; a setting
+  to control it is not in this version.
 - The Tier Routing cost saving has not been measured as evidence. Tier Routing ships as an opt-in
   capability and claims no saving.
 

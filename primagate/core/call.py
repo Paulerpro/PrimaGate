@@ -100,6 +100,7 @@ _HINTS: dict[str, Callable[[ChatCompletionRequest], bool]] = {
     "n": lambda r: r.n is not None and r.n > 1,
     "seed": lambda r: r.seed is not None,
     "temperature": lambda r: r.temperature is not None,
+    "top_p": lambda r: r.top_p is not None,
 }
 
 

@@ -95,6 +95,10 @@ compared:
 - Anthropic's version 5 models (`claude-haiku-5-5`, `claude-sonnet-5-5`) reject `temperature` and
   reason before they answer. For them the Analyzer sends no `temperature` and turns thinking off,
   so the 16 tokens go on the answer. Version 4 and earlier models get `temperature` 0 as before.
+- `o4-mini`, one of OpenAI's reasoning models, did not work as an Analyzer in a live check: every
+  routed call degraded to the Interim Binding with `provider_error`. The cause was not diagnosed.
+  The event carries no more detail than that, so test an Analyzer with a few calls and look for
+  `routing_decision` events before you rely on it.
 - The live Tier Routing test passed with `gpt-4o-mini` and with `claude-haiku-5-5` as the
   Analyzer. The comparison harness has not been run on an Anthropic Analyzer yet, so there are no
   measured cost, latency or calibration figures for one.

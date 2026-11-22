@@ -511,7 +511,7 @@ def test_temperature_is_still_sent_to_models_that_take_it(model: str) -> None:
 
 def test_a_model_that_rejects_temperature_declares_it_as_a_hint() -> None:
     caps = AnthropicAdapter().capabilities()
-    assert caps.hints_for("claude-sonnet-5-5") == {"n", "seed", "temperature"}
+    assert caps.hints_for("claude-sonnet-5-5") == {"n", "seed", "temperature", "top_p"}
     assert caps.hints_for("claude-sonnet-4-5") == {"n", "seed"}
     assert OpenAIAdapter().capabilities().hints_for("gpt-4o") == frozenset()
 
@@ -533,3 +533,14 @@ def test_thinking_is_never_sent_to_a_model_that_does_not_think_by_default() -> N
 
 def test_a_date_after_the_family_is_not_read_as_a_version() -> None:
     assert _for_model("claude-sonnet-20250101", temperature=0.5).json_body["temperature"] == 0.5
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-haiku-5-5"])
+def test_top_p_is_refused_for_models_that_reject_it(model: str) -> None:
+    with pytest.raises(errors.UnsupportedParamsError) as info:
+        _for_model(model, top_p=0.9)
+    assert "top_p" in info.value.message and model in info.value.message
+
+
+def test_top_p_is_still_sent_to_models_that_take_it() -> None:
+    assert _for_model("claude-sonnet-4-5", top_p=0.9).json_body["top_p"] == 0.9

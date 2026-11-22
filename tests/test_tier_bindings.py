@@ -292,3 +292,11 @@ def test_temperature_is_accepted_for_a_model_that_takes_it() -> None:
         tier_bindings={"MEDIUM": {"model": "claude-sonnet-4-5", "settings": {"temperature": 0.2}}}
     )
     PrimaGate(tier_bindings={"MEDIUM": {"model": "gpt-4o", "settings": {"temperature": 0.2}}})
+
+
+def test_top_p_is_refused_for_a_model_that_rejects_it() -> None:
+    with pytest.raises(primagate.BadRequestError) as info:
+        PrimaGate(
+            tier_bindings={"MEDIUM": {"model": "claude-sonnet-5-5", "settings": {"top_p": 0.9}}}
+        )
+    assert "MEDIUM" in str(info.value) and "top_p" in str(info.value)

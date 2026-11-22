@@ -61,7 +61,8 @@ _ERROR_TYPE_STATUS = {
 }
 _CONTEXT_PHRASES = ("prompt is too long", "context window")
 # `claude-<family>-<major>...`. Anthropic's version 5 models reason before answering and reject
-# `temperature`; the older `claude-<major>-...` names and version 4 and below do neither.
+# `temperature` and `top_p`; the older `claude-<major>-...` names and version 4 and below do
+# neither.
 _FAMILY_MAJOR = re.compile(r"^claude-[a-z]+-(\d{1,2})(?:-|$)")
 
 
@@ -71,7 +72,7 @@ def _is_version_5_or_later(model: str) -> bool:
 
 
 def _model_hints(model: str) -> frozenset[str]:
-    return frozenset({"temperature"}) if _is_version_5_or_later(model) else frozenset()
+    return frozenset({"temperature", "top_p"}) if _is_version_5_or_later(model) else frozenset()
 
 
 def _thinks_by_default(model: str) -> bool:
@@ -91,11 +92,13 @@ class AnthropicAdapter:
             raise errors.UnsupportedParamsError(
                 "Anthropic does not support seed", llm_provider=PROVIDER
             )
-        if request.temperature is not None and "temperature" in _model_hints(request.model):
-            raise errors.UnsupportedParamsError(
-                f"Anthropic model '{request.model}' does not support temperature",
-                llm_provider=PROVIDER,
-            )
+        rejected = _model_hints(request.model)
+        for name in ("temperature", "top_p"):
+            if getattr(request, name) is not None and name in rejected:
+                raise errors.UnsupportedParamsError(
+                    f"Anthropic model '{request.model}' does not support {name}",
+                    llm_provider=PROVIDER,
+                )
         system, messages = _split_messages(request.messages)
         body: dict[str, Any] = {
             "model": request.model,

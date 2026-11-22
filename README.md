@@ -87,6 +87,13 @@ for model in ["gpt-4o", "claude-sonnet-5-5"]:
 
 Set `ANTHROPIC_API_KEY` for the Claude model, as described in step 2.
 
+**Give Claude version 5 models room in `max_tokens`.** `claude-haiku-5-5` and `claude-sonnet-5-5`
+reason before they answer, and that reasoning counts against `max_tokens`. With a small limit the
+whole budget can go on reasoning, and the call ends with `finish_reason` `"length"` and
+`message.content` of `None`, for a streamed call as well. PrimaGate reports this as it is and does
+not change the limit. Leave the limit unset, or allow well above the length of the answer you
+expect.
+
 ### 6. Handle an unsupported feature
 
 When a model cannot do something your request needs (tools, structured output or images),
@@ -121,7 +128,7 @@ The model answers from the text alone, because the image was dropped.
 
 The names you can drop are `"tools"`, `"response_format"` and `"image"`. `drop_params=True` is
 different: it only drops small tuning options a provider ignores or rejects, such as `seed` on
-Anthropic or `temperature` on Anthropic's version 5 models, and never a feature. Set `drop_params` on `PrimaGate(...)` to apply it to every call
+Anthropic or `temperature` and `top_p` on Anthropic's version 5 models, and never a feature. Set `drop_params` on `PrimaGate(...)` to apply it to every call
 from that instance; a value passed to a single call wins. `primagate.drop_params = [...]` does the
 same for the shared default instance used by `completion` and `acompletion`.
 
