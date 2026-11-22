@@ -95,6 +95,13 @@ compared:
 - Anthropic's version 5 models (`claude-haiku-5-5`, `claude-sonnet-5-5`) reject `temperature` and
   reason before they answer. For them the Analyzer sends no `temperature` and turns thinking off,
   so the 16 tokens go on the answer. Version 4 and earlier models get `temperature` 0 as before.
+- Measured on 2026-11-22 over the harness's 100 tasks, two OpenAI Analyzers differed most in how
+  often they followed the exact answer format: `gpt-4o-mini` gave a valid answer on 99 of 100
+  calls and `gpt-4.1-mini` on 23 of 100, the other 77 degrading to the Interim Binding as
+  `malformed_output`. `gpt-4.1-mini` costs more per routing call ($0.000062 against $0.000025).
+  Neither Analyzer's confidence was calibrated: calls at 0.9 and above passed no more often than
+  calls between 0.7 and 0.9. No `confidence_threshold` between 0.5 and 0.9 kept at least half the
+  calls with at least 95% passing, so this guide suggests no value. Measure your own workload.
 - `o4-mini`, one of OpenAI's reasoning models, did not work as an Analyzer in a live check: every
   routed call degraded to the Interim Binding with `provider_error`. The cause was not diagnosed.
   The event carries no more detail than that, so test an Analyzer with a few calls and look for
