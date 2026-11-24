@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Lets the owner start a run from the Actions tab without a new commit.
+  workflow_dispatch:
 
 permissions:
   contents: read
