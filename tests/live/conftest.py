@@ -244,7 +244,9 @@ def report_path(env: Mapping[str, str], cwd: Path) -> Path:
     chosen = env.get(REPORT_ENV, "").strip()
     if not chosen:
         return cwd / REPORT_NAME
-    path = Path(chosen)
+    # Only Windows reads a trailing backslash as a separator; elsewhere it would end up in the
+    # folder's name, so it is dropped before the path is built.
+    path = Path(chosen.rstrip("\\") or chosen)
     if not path.is_absolute():
         path = cwd / path
     # A trailing separator, an existing folder, or a new name without a suffix is a folder.
